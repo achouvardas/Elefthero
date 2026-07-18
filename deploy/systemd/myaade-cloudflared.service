@@ -1,5 +1,5 @@
 [Unit]
-Description=myAade Cloudflare Tunnel
+Description=Elefthero Cloudflare Tunnel
 After=network-online.target myaade.service
 Wants=network-online.target
 

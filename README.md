@@ -1,44 +1,46 @@
-# myAade
+# Elefthero
 
-Self-hosted, bilingual Greek invoicing with AADE myDATA submission, VIES client validation, PDF invoices, and Cloudflare-protected administration.
+## The open-source way to invoice in Greece.
 
-## Environments
+Elefthero (Ελεύθερο) is a self-hosted, bilingual invoicing workspace for Greek small businesses. It makes AADE myDATA reporting understandable, inspectable, and accessible—without locking a business into an expensive proprietary accounting platform.
 
-| Mode | Purpose | AADE submission |
-|---|---|---|
-| `test` | AADE Test environment | Real submission to `mydataapidev.aade.gr` |
-| `production` | Live business use | Real submission to `mydatapi.aade.gr` |
+## Why Elefthero
 
-Drafts can be removed; a submitted invoice must be cancelled through AADE rather than deleted.
+Greek invoicing software is often costly, opaque, and built around long contracts. Elefthero is an open-source alternative: the business controls its data, can inspect every XML submission, and can run the application on its own server.
+
+- **Freedom** — MIT-licensed, self-hosted, no vendor lock-in.
+- **Openness** — sent and received AADE XML is retained and viewable in the developer log.
+- **Accessibility** — Greek / English interface, clear setup, simple invoice flow, and a light high-contrast design.
 
 ## How it works
 
 ```mermaid
 flowchart TD
-  A[First-run setup] --> B[Admin account + encrypted settings]
-  B --> C[Business profile and invoice series]
-  C --> D[Create multi-line invoice]
-  D --> E[VIES client lookup: EL + 9-digit VAT]
-  E --> F[Build AADE namespace-qualified XML]
-  F --> G{Environment}
-  G -->|test| I[AADE Test SendInvoices]
-  G -->|production| J[AADE Production SendInvoices]
-  I --> K[Store sent and received XML]
-  J --> K
-  K --> L
+  A[Business profile & encrypted AADE credentials] --> B[Create an invoice]
+  B --> C[Validate a client with VIES]
+  C --> D[Classify income, VAT and payment method]
+  D --> E[Build AADE-compatible XML]
+  E --> F{Submission environment}
+  F -->|AADE Test| G[mydataapidev.aade.gr]
+  F -->|Production| H[mydatapi.aade.gr]
+  G --> I[Store sent XML, response XML, UID, MARK and QR URL]
+  H --> I
+  I --> J[Printable invoice PDF and clickable AADE link]
 ```
 
 ## Features
 
-- Greek / English UI and light / dark mode
-- Local SQLite database, encrypted integration secrets
-- Admin login, users, Cloudflare Turnstile server-side validation
-- AADE invoice types, multiple invoice lines, zero-VAT exemption validation
-- VIES validation for Greek VATs (`EL` service code)
-- Configurable invoice series and number
-- AADE XML sent/received debug log and inline PDF invoices
+- AADE Test and Production submission modes—both perform real API submissions
+- AADE invoice XML with income classifications, payment methods, VAT exemptions and EUR currency
+- VIES client verification for Greek VAT numbers (`EL` service code)
+- Reusable SQLite client book, including addresses copied into invoices
+- Multiple invoice lines, configurable invoice series and numbering
+- Encrypted-at-rest AADE and Cloudflare secrets
+- User management and Cloudflare Turnstile login protection
+- Developer log with sent and received XML
+- PDF invoice with business identity, payment method, UID, ΜΑΡΚ and AADE QR URL
 
-## Run
+## Run locally
 
 ```bash
 python3 -m venv .venv
@@ -46,11 +48,11 @@ python3 -m venv .venv
 python app.py
 ```
 
-Open `http://127.0.0.1:5000` and complete first-run setup. Keep `.env`, `instance/`, and Cloudflare credentials out of Git.
+Open `http://127.0.0.1:5000` and complete the secure first-run setup. Never commit `.env`, `instance/`, or Cloudflare credentials.
 
-## Deploy with Cloudflare Tunnel
+## Deployment
 
-Configure `cloudflared/config.yml` outside Git, then install the included services:
+The included systemd units run Gunicorn and Cloudflare Tunnel after reboot:
 
 ```bash
 sudo cp deploy/systemd/myaade.service /etc/systemd/system/
@@ -61,9 +63,29 @@ sudo systemctl enable --now myaade.service myaade-cloudflared.service
 
 Use `journalctl -u myaade.service -f` for application logs.
 
-## Security
+## Devpost / Codex Hackathon
 
-Secrets entered through Settings are encrypted before SQLite storage. Back up `instance/myaade-master.key` together with the database; losing the key makes stored secrets unrecoverable.
+Elefthero was built as an Apps for your life project for the OpenAI Codex Hackathon.
+
+### How we collaborated with Codex and GPT-5.6
+
+Codex was the hands-on implementation partner throughout the project. We used it to turn real AADE validation responses into concrete XML fixes, build the Flask/SQLite product end-to-end, and iteratively refine the live deployment.
+
+- Built the Flask data model, first-run setup, encrypted settings, user administration, and audit logging.
+- Implemented and debugged AADE invoice XML against the official documentation and real AADE Test responses: invoice ordering, counterpart branches, classification namespaces, payment-method nesting, and mandatory currency.
+- Added VIES client lookup, reusable client addresses, multi-line invoices, zero-VAT validation, PDF rendering, QR/UID/MARK response handling, and Cloudflare Tunnel deployment.
+- Used Codex to make product decisions visible in code: local secrets never enter Git, sent/received XML is inspectable, and AADE Test and Production are explicit real-submission modes.
+- Iterated on the interaction design using live feedback: simplified light interface, Greek/English controls, understandable AADE error surfacing, and printable invoices with business identity.
+
+The result is not a mockup: it is a running, self-hosted application with real AADE Test API submission and a public, MIT-licensed codebase.
+
+### Demo checklist
+
+1. Complete Business Profile and AADE Test credentials in Settings.
+2. Validate a Greek client through VIES.
+3. Create a service invoice, choose payment method and income classification, then submit to AADE Test.
+4. Open Developer Logs to show the exact sent XML and AADE response XML.
+5. Open the generated PDF and AADE QR URL.
 
 ## License
 
