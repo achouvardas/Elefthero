@@ -1,6 +1,8 @@
 import os
 import base64
 import io
+import hmac
+import secrets
 from html import escape
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -23,6 +25,7 @@ from reportlab.graphics import renderPDF
 from reportlab.graphics.shapes import Drawing
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
+from markupsafe import Markup
 from sqlalchemy import func, inspect, or_, text
 
 load_dotenv()
@@ -173,9 +176,20 @@ class ActivityLog(db.Model):
     actor = db.Column(db.String(255))
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
+class LoginAttempt(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    identifier = db.Column(db.String(255), nullable=False, index=True)
+    ip_address = db.Column(db.String(64), nullable=False, index=True)
+    attempts = db.Column(db.Integer, nullable=False, default=0)
+    window_started_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+    locked_until = db.Column(db.DateTime)
+
 def locale(): return session.get("locale", "en")
+def csrf_token():
+    if "csrf_token" not in session: session["csrf_token"] = secrets.token_urlsafe(32)
+    return session["csrf_token"]
 @app.context_processor
-def inject_ui(): return {"t": COPY[locale()], "locale": locale(), "mode": setting("mydata_mode", current_mode()) if User.query.first() else current_mode(), "current_user": current_user()}
+def inject_ui(): return {"t": COPY[locale()], "locale": locale(), "mode": setting("mydata_mode", current_mode()) if User.query.first() else current_mode(), "current_user": current_user(), "csrf_token": csrf_token, "csrf_input": lambda: Markup(f'<input type="hidden" name="csrf_token" value="{csrf_token()}">')}
 def current_mode(): return os.getenv("MYDATA_MODE", "test").lower()
 def cipher():
     key_path = os.path.join(app.instance_path, "myaade-master.key")
@@ -197,6 +211,31 @@ def decrypt_secret(value): return cipher().decrypt(value.encode()).decode() if v
 def audit(action, detail="", payload=None):
     db.session.add(ActivityLog(action=action, detail=detail, payload=payload, actor=session.get("user_email"))); db.session.commit()
 def current_user(): return db.session.get(User, session.get("user_id")) if session.get("user_id") else None
+def login_limit_settings():
+    def number(key, default, minimum, maximum):
+        try: return max(minimum, min(int(setting(key, str(default))), maximum))
+        except (TypeError, ValueError): return default
+    return number("login_rate_limit_attempts", 5, 1, 20), number("login_rate_limit_window_minutes", 15, 1, 1440), number("login_rate_limit_lockout_minutes", 15, 1, 1440)
+def login_attempt_record(identifier): return LoginAttempt.query.filter_by(identifier=identifier, ip_address=request.remote_addr or "unknown").first()
+def login_locked(identifier):
+    record = login_attempt_record(identifier)
+    if not record: return 0
+    now = datetime.utcnow()
+    if record.locked_until and record.locked_until > now: return max(1, int((record.locked_until - now).total_seconds() / 60) + 1)
+    _, window, _ = login_limit_settings()
+    if now - record.window_started_at >= timedelta(minutes=window):
+        record.attempts, record.window_started_at, record.locked_until = 0, now, None; db.session.commit()
+    return 0
+def record_login_failure(identifier):
+    attempts_limit, window, lockout = login_limit_settings(); now = datetime.utcnow(); record = login_attempt_record(identifier)
+    if not record:
+        record = LoginAttempt(identifier=identifier, ip_address=request.remote_addr or "unknown", attempts=0, window_started_at=now); db.session.add(record)
+    if now - record.window_started_at >= timedelta(minutes=window): record.attempts, record.window_started_at, record.locked_until = 0, now, None
+    record.attempts += 1
+    if record.attempts >= attempts_limit: record.locked_until = now + timedelta(minutes=lockout)
+    db.session.commit()
+def clear_login_failures(identifier):
+    LoginAttempt.query.filter_by(identifier=identifier, ip_address=request.remote_addr or "unknown").delete(); db.session.commit()
 def require_admin():
     if not current_user() or current_user().role != "admin": abort(403)
 def turnstile_ok(token):
@@ -216,6 +255,11 @@ def protect_app():
     public = {"setup", "login", "two_factor_challenge", "health", "static"}
     if not User.query.first() and request.endpoint not in public: return redirect(url_for("setup"))
     if User.query.first() and not current_user() and request.endpoint not in public: return redirect(url_for("login"))
+@app.before_request
+def csrf_protect():
+    if request.method != "POST": return
+    expected, provided = session.get("csrf_token", ""), request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
+    if not expected or not provided or not hmac.compare_digest(expected, provided): abort(400, "Invalid or missing CSRF token.")
 
 def invoice_xml(invoice):
     root = Element("InvoicesDoc", {"xmlns": "http://www.aade.gr/myDATA/invoice/v1.0"})
@@ -310,15 +354,19 @@ def setup():
 def login():
     if not User.query.first(): return redirect(url_for("setup"))
     if request.method == "POST":
-        user = User.query.filter_by(email=request.form["email"].strip().lower()).first()
+        identifier = request.form["email"].strip().lower()
+        locked_minutes = login_locked(identifier)
+        if locked_minutes:
+            audit("login_rate_limited", identifier); flash(f"Too many failed sign-in attempts. Try again in about {locked_minutes} minute(s).", "error"); return redirect(url_for("login"))
+        user = User.query.filter_by(email=identifier).first()
         if not turnstile_ok(request.form.get("cf-turnstile-response")):
-            flash("Turnstile verification failed. Refresh this page, complete the check, and try again.", "error"); audit("login_turnstile_failed", request.form["email"]); return redirect(url_for("login"))
+            record_login_failure(identifier); flash("Turnstile verification failed. Refresh this page, complete the check, and try again.", "error"); audit("login_turnstile_failed", identifier); return redirect(url_for("login"))
         if not user or not check_password_hash(user.password_hash, request.form["password"]):
-            flash("Invalid email or password.", "error"); audit("login_failed", request.form["email"]); return redirect(url_for("login"))
+            record_login_failure(identifier); flash("Invalid email or password.", "error"); audit("login_failed", identifier); return redirect(url_for("login"))
         session.clear()
         if user.totp_enabled and user.totp_secret:
             session["pending_2fa_user_id"] = user.id; session["pending_2fa_email"] = user.email; audit("login_2fa_challenge", "Password accepted; TOTP required"); return redirect(url_for("two_factor_challenge"))
-        session["user_id"], session["user_email"] = user.id, user.email
+        clear_login_failures(identifier); session["user_id"], session["user_email"] = user.id, user.email
         if setting("turnstile_secret") and not setting("turnstile_sitekey"): flash("Turnstile is disabled because its public site key is missing. Configure both Turnstile keys in Settings.", "error")
         audit("login", "Successful login"); return redirect(url_for("dashboard"))
     return render_template("login.html", turnstile_sitekey=setting("turnstile_sitekey"))
@@ -330,10 +378,13 @@ def two_factor_challenge():
     user = db.session.get(User, session.get("pending_2fa_user_id"))
     if not user or not user.totp_enabled or not user.totp_secret: return redirect(url_for("login"))
     if request.method == "POST":
+        locked_minutes = login_locked(user.email)
+        if locked_minutes:
+            audit("login_rate_limited", user.email); flash(f"Too many failed sign-in attempts. Try again in about {locked_minutes} minute(s).", "error"); return redirect(url_for("two_factor_challenge"))
         code = request.form.get("code", "").replace(" ", "")
         if not pyotp.TOTP(decrypt_secret(user.totp_secret)).verify(code, valid_window=1):
-            audit("login_2fa_failed", user.email); flash("Invalid authenticator code.", "error"); return redirect(url_for("two_factor_challenge"))
-        session.clear(); session["user_id"], session["user_email"] = user.id, user.email; audit("login_2fa", "Successful two-factor login"); return redirect(url_for("dashboard"))
+            record_login_failure(user.email); audit("login_2fa_failed", user.email); flash("Invalid authenticator code.", "error"); return redirect(url_for("two_factor_challenge"))
+        clear_login_failures(user.email); session.clear(); session["user_id"], session["user_email"] = user.id, user.email; audit("login_2fa", "Successful two-factor login"); return redirect(url_for("dashboard"))
     return render_template("two_factor_challenge.html", email=user.email)
 
 @app.route("/two-factor/setup", methods=["GET", "POST"])
@@ -373,11 +424,11 @@ def two_factor_disable():
 def settings():
     require_admin()
     if request.method == "POST":
-        for key, secret in [("mydata_mode", False), ("mydata_test_user_id", True), ("mydata_test_subscription_key", True), ("mydata_production_user_id", True), ("mydata_production_subscription_key", True), ("resend_api_key", True), ("resend_sender_name", False), ("resend_sender_email", False), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False)]:
+        for key, secret in [("mydata_mode", False), ("mydata_test_user_id", True), ("mydata_test_subscription_key", True), ("mydata_production_user_id", True), ("mydata_production_subscription_key", True), ("resend_api_key", True), ("resend_sender_name", False), ("resend_sender_email", False), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False), ("login_rate_limit_attempts", False), ("login_rate_limit_window_minutes", False), ("login_rate_limit_lockout_minutes", False)]:
             value = request.form.get(key, "")
             if value or not secret: set_setting(key, value, secret)
         db.session.commit(); audit("settings_updated", "Administrator updated integration and numbering settings"); flash("Settings saved. Secrets are encrypted at rest.", "success"); return redirect(url_for("settings"))
-    values = {key: setting(key) for key in ["mydata_mode", "resend_sender_name", "resend_sender_email", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat"]}
+    values = {key: setting(key) for key in ["mydata_mode", "resend_sender_name", "resend_sender_email", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat", "login_rate_limit_attempts", "login_rate_limit_window_minutes", "login_rate_limit_lockout_minutes"]}
     configured = {key: bool(setting(key)) for key in ["mydata_test_user_id", "mydata_test_subscription_key", "mydata_production_user_id", "mydata_production_subscription_key", "resend_api_key", "turnstile_secret"]}
     configured["mydata_test_user_id"] |= bool(setting("mydata_user_id"))
     configured["mydata_test_subscription_key"] |= bool(setting("mydata_subscription_key"))
@@ -719,6 +770,8 @@ with app.app_context():
     user_columns = {column["name"] for column in inspect(db.engine).get_columns("user")}
     for name, definition in {"totp_secret": "TEXT", "totp_pending_secret": "TEXT", "totp_enabled": "BOOLEAN DEFAULT 0"}.items():
         if name not in user_columns: db.session.execute(text(f"ALTER TABLE user ADD COLUMN {name} {definition}"))
+    for key, value in {"login_rate_limit_attempts": "5", "login_rate_limit_window_minutes": "15", "login_rate_limit_lockout_minutes": "15"}.items():
+        if not db.session.get(AppSetting, key): set_setting(key, value)
     configured_mode = setting("mydata_mode", "")
     if configured_mode and configured_mode not in ENVIRONMENTS: set_setting("mydata_mode", "test")
     db.session.commit()

@@ -34,6 +34,8 @@
 ## Security, access, and accessibility
 
 - Password-hashed local users with administrator/user roles.
+- Every state-changing form requires a per-session CSRF token; requests without a valid token are rejected server-side.
+- Persistent login rate limiting applies to password, Turnstile, and authenticator-code failures for the same email/IP pair. Administrators can set failed-attempt, time-window, and lockout limits in Settings; defaults are 5 attempts, 15 minutes, and a 15-minute lockout.
 - Optional Cloudflare Turnstile, enabled only when both site key and secret are configured.
 - Optional authenticator-app TOTP 2FA: QR enrollment, one-time-code challenge at login, encrypted secret storage, and password + current code required for disablement.
 - AADE credentials, Resend key, Turnstile secret, and TOTP seeds are encrypted at rest using a local Fernet key.

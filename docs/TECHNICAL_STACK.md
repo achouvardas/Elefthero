@@ -8,7 +8,7 @@
 | Edge | Cloudflare Tunnel / `cloudflared` | Public hostname without an exposed application port |
 | AADE | HTTPS REST + XML | Test and Production myDATA transmission |
 | Encryption | `cryptography` / Fernet | Encrypted application secrets and TOTP seeds |
-| Authentication | Werkzeug hashes, Turnstile, `pyotp` | Password login, optional anti-bot check, optional authenticator 2FA |
+| Authentication | Werkzeug hashes, CSRF tokens, rate limiting, Turnstile, `pyotp` | Password login, protected state-changing requests, configurable throttling, optional anti-bot check, optional authenticator 2FA |
 | PDF | ReportLab | Inline invoice PDFs and QR rendering |
 | Client enrichment | VIES and ΓΕΜΗ public endpoints | VAT validation and optional business data enrichment |
 | Email | Resend API | Manually triggered invoice PDF delivery |

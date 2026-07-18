@@ -29,6 +29,7 @@ sequenceDiagram
     C-->>E: Verification token
   end
   E->>E: Verify password hash
+  E->>E: Apply configured rate limit by email/IP
   opt User enabled TOTP
     E-->>U: Request six-digit code
     U->>A: Read rotating code
@@ -37,6 +38,8 @@ sequenceDiagram
   end
   E-->>U: Authenticated session
 ```
+
+All state-changing browser requests carry a per-session CSRF token and are rejected when the token is missing or invalid.
 
 ## AADE submission service
 

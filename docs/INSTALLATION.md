@@ -45,6 +45,7 @@ Open `http://127.0.0.1:5000`, create the first administrator, and complete the a
 | Business profile | Authenticated UI | Issuer VAT and PDF identity/details |
 | AADE credentials | Settings | Encrypted Test and Production pairs |
 | Turnstile | Settings | Optional sign-in protection; both site key and secret are needed |
+| Login rate limiting | Settings | Failed-attempt, time-window, and lockout limits; defaults to 5 / 15 / 15 minutes |
 | Resend | Settings | Optional manual invoice email delivery |
 | TOTP | User `2FA` page | Generated and encrypted by the app |
 

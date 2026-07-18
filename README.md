@@ -36,7 +36,7 @@ Elefthero is intentionally focused, but complete enough for day-to-day small-bus
 - Inline PDF invoices with business logo/details, customer information, line VAT, AADE identifiers, and manual Resend delivery after transmission.
 - Saved clients with VIES validation, optional ΓΕΜΗ enrichment, reusable addresses, filters, pagination, and invoice-by-type statistics.
 - Templates, editable “reuse as new draft”, dashboard totals, top customers, and client analytics.
-- Secure setup, encrypted settings, user roles, optional Cloudflare Turnstile, optional authenticator-app 2FA, audit logs, and accessibility controls.
+- Secure setup, encrypted settings, user roles, server-enforced CSRF protection, configurable login rate limiting, optional Cloudflare Turnstile, optional authenticator-app 2FA, audit logs, and accessibility controls.
 
 Read the complete [feature reference](docs/FEATURES.md).
 
