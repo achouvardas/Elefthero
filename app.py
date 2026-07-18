@@ -377,7 +377,12 @@ def new_invoice():
     return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=ordered_types, next_number=setting("invoice_next_number", "1"), series=setting("invoice_series", "A"), exemption_reasons=VAT_EXEMPTION_REASONS, income_categories=INCOME_CATEGORIES, income_types=INCOME_TYPES, payment_methods=PAYMENT_METHODS)
 
 @app.get("/invoices/<int:invoice_id>")
-def invoice_detail(invoice_id): return render_template("invoice_detail.html", invoice=db.get_or_404(Invoice, invoice_id))
+def invoice_detail(invoice_id):
+    invoice = db.get_or_404(Invoice, invoice_id)
+    lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).order_by(InvoiceLine.id).all()
+    if not lines:
+        lines = [type("LegacyLine", (), {"description": invoice.description, "net": invoice.net, "vat_rate": invoice.vat_rate, "vat_exemption_reason": None, "income_category": None, "income_type": None})()]
+    return render_template("invoice_detail.html", invoice=invoice, lines=lines, invoice_type_name=INVOICE_TYPES.get(invoice.invoice_type, "Unknown myDATA type"), payment_method_name=PAYMENT_METHODS.get(invoice.payment_method, "-"), invoice_xml_preview=invoice_xml(invoice).decode("utf-8"))
 @app.post("/invoices/<int:invoice_id>/send")
 def send_invoice(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
@@ -386,7 +391,7 @@ def send_invoice(invoice_id):
     except (ValueError, requests.RequestException) as error: flash(str(error), "error")
     return redirect(url_for("invoice_detail", invoice_id=invoice.id))
 @app.get("/invoices")
-def invoices(): return render_template("invoices.html", invoices=Invoice.query.order_by(Invoice.created_at.desc()).all())
+def invoices(): return render_template("invoices.html", invoices=Invoice.query.order_by(Invoice.created_at.desc()).all(), invoice_types=INVOICE_TYPES, payment_methods=PAYMENT_METHODS)
 @app.post("/invoices/<int:invoice_id>/delete")
 def delete_invoice(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
