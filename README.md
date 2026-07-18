@@ -1,16 +1,15 @@
 # myAade
 
-Local-first, bilingual Greek invoicing with AADE myDATA submission, VIES client validation, PDF invoices, and Cloudflare-protected administration.
+Self-hosted, bilingual Greek invoicing with AADE myDATA submission, VIES client validation, PDF invoices, and Cloudflare-protected administration.
 
 ## Environments
 
 | Mode | Purpose | AADE submission |
 |---|---|---|
-| `local` | Safe local simulation and draft work | Never calls AADE |
 | `test` | AADE Test environment | Real submission to `mydataapidev.aade.gr` |
 | `production` | Live business use | Real submission to `mydatapi.aade.gr` |
 
-Deletion is allowed only in `local`. In Test and Production, submitted records must be cancelled through AADE rather than removed.
+Drafts can be removed; a submitted invoice must be cancelled through AADE rather than deleted.
 
 ## How it works
 
@@ -22,12 +21,10 @@ flowchart TD
   D --> E[VIES client lookup: EL + 9-digit VAT]
   E --> F[Build AADE namespace-qualified XML]
   F --> G{Environment}
-  G -->|local| H[Local XML log + simulated response]
   G -->|test| I[AADE Test SendInvoices]
   G -->|production| J[AADE Production SendInvoices]
   I --> K[Store sent and received XML]
   J --> K
-  H --> L[Invoice PDF / activity log]
   K --> L
 ```
 
