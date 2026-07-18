@@ -211,14 +211,14 @@ def invoice_xml(invoice):
     inv = SubElement(root, "invoice")
     issuer = SubElement(inv, "issuer")
     SubElement(issuer, "vatNumber").text, SubElement(issuer, "country").text, SubElement(issuer, "branch").text = setting("business_vat", os.getenv("MYDATA_VAT_NUMBER", "")), "GR", "0"
-    if invoice.invoice_type not in {"11.1", "11.2"}:
+    if invoice.invoice_type not in {"11.1", "11.2", "11.4"}:
         counterpart = SubElement(inv, "counterpart")
         SubElement(counterpart, "vatNumber").text, SubElement(counterpart, "country").text, SubElement(counterpart, "branch").text = invoice.vat_number, "GR", "0"
     header = SubElement(inv, "invoiceHeader")
     SubElement(header, "series").text, SubElement(header, "aa").text = setting("invoice_series", "A"), invoice.number
     SubElement(header, "issueDate").text, SubElement(header, "invoiceType").text = invoice.issue_date.isoformat(), invoice.invoice_type
     SubElement(header, "currency").text = "EUR"
-    if invoice.correlated_mark:
+    if invoice.invoice_type == "5.1" and invoice.correlated_mark:
         SubElement(header, "correlatedInvoices").text = invoice.correlated_mark
     payment = SubElement(SubElement(inv, "paymentMethods"), "paymentMethodDetails")
     SubElement(payment, "type").text, SubElement(payment, "amount").text = invoice.payment_method or "3", f"{invoice.total:.2f}"
@@ -400,7 +400,7 @@ def invoice_pdf(invoice_id):
     totals_y = 170; canvas.setFillColor(pale); canvas.rect(330, totals_y, 222, 82, fill=1, stroke=1); canvas.setFillColor(navy); canvas.setFont("SiraSans", 10); canvas.drawString(344, totals_y+58, "ΚΑΘΑΡΗ ΑΞΙΑ"); canvas.drawRightString(538, totals_y+58, f"{line_net_total:.2f} €"); canvas.drawString(344, totals_y+37, "Φ.Π.Α."); canvas.drawRightString(538, totals_y+37, f"{line_vat_total:.2f} €"); canvas.setFont("SiraSans", 12); canvas.drawString(344, totals_y+14, "ΣΥΝΟΛΙΚΟ ΠΟΣΟ"); canvas.drawRightString(538, totals_y+14, f"{line_net_total + line_vat_total:.2f} €")
     canvas.setFont("SiraSans", 9); canvas.setFillColor(slate); canvas.drawString(42, 235, f"Τρόπος πληρωμής: {PAYMENT_METHODS.get(invoice.payment_method, '-')}"); canvas.drawString(42, 216, f"UID: {invoice.invoice_uid or '-'}"); canvas.drawString(42, 197, f"ΜΑΡΚ: {invoice.mydata_mark or '-'}")
     pdf_notes = invoice.notes or ""
-    if invoice.correlated_mark:
+    if invoice.invoice_type == "5.1" and invoice.correlated_mark:
         pdf_notes = f"{pdf_notes} - " if pdf_notes else ""
         pdf_notes += f"Συσχετισμένο ΜΑΡΚ: {invoice.correlated_mark}"
     if pdf_notes:
@@ -439,7 +439,7 @@ def new_invoice():
         exemption_notes = list(dict.fromkeys(VAT_EXEMPTION_REASONS[reason] for _, _, _, _, rate, reason, _, _ in parsed if rate == 0 and reason))
         notes = request.form.get("notes", "").strip()
         if exemption_notes: notes = f"{notes} - {' · '.join(exemption_notes)}" if notes else " · ".join(exemption_notes)
-        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], customer_address=customer_address, customer_profession=customer_profession, notes=notes, correlated_mark=correlated_mark if invoice_type in credit_original_types else None, description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]), payment_method=payment_method)
+        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], customer_address=customer_address, customer_profession=customer_profession, notes=notes, correlated_mark=correlated_mark if invoice_type == "5.1" else None, description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]), payment_method=payment_method)
         db.session.add(invoice)
         db.session.flush()
         for description, quantity, unit_price, net, rate, reason, category, income_type in parsed: db.session.add(InvoiceLine(invoice_id=invoice.id, description=description, quantity=quantity, unit_price=unit_price, net=net, vat_rate=rate, vat_exemption_reason=reason, income_category=category, income_type=income_type))
