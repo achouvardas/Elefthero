@@ -8,19 +8,19 @@
   </div>
 
   <div class="grid gap-4 md:grid-cols-3">
-    <div class="rounded-xl border bg-white p-4"><p class="font-semibold">1. Start the tour</p><p class="mt-1 text-sm text-slate-600">Text-to-speech narrates the story, navigation, and key workflows.</p></div>
+    <div class="rounded-xl border bg-white p-4"><p class="font-semibold">1. Start the tour</p><p class="mt-1 text-sm text-slate-600">A friendly, natural system voice narrates the story, navigation, and key workflows.</p></div>
     <div class="rounded-xl border bg-white p-4"><p class="font-semibold">2. Record this tab</p><p class="mt-1 text-sm text-slate-600">Choose “This tab” and enable “Share tab audio” when your browser asks.</p></div>
     <div class="rounded-xl border bg-white p-4"><p class="font-semibold">3. Review and publish</p><p class="mt-1 text-sm text-slate-600">Download MP4, review it, then upload it publicly to YouTube yourself.</p></div>
   </div>
 
-  <div class="rounded-2xl border bg-white overflow-hidden shadow-sm">
+  <div id="demo-player" class="rounded-2xl border bg-white overflow-hidden shadow-sm">
     <div class="flex flex-wrap items-center justify-between gap-3 border-b bg-slate-50 px-5 py-4">
       <div><p id="step-title" class="font-bold">Ready to begin</p><p id="step-meta" class="text-sm text-slate-600">0:00 / 2:58</p></div>
       <div class="flex flex-wrap gap-2">
         <button id="start-demo" class="rounded-lg bg-cyan-700 px-4 py-2 font-semibold text-white">Start tour</button>
         <button id="pause-demo" class="rounded-lg border px-4 py-2 font-semibold">Pause</button>
         <button id="restart-demo" class="rounded-lg border px-4 py-2 font-semibold">Restart</button>
-        <button id="record-demo" class="rounded-lg border border-cyan-700 px-4 py-2 font-semibold text-cyan-800">Record &amp; export MP4</button>
+        <button id="record-demo" class="rounded-lg border border-cyan-700 px-4 py-2 font-semibold text-cyan-800">Record full-screen &amp; export MP4</button>
       </div>
     </div>
     <div class="bg-slate-100 p-3"><iframe id="demo-frame" title="Elefthero guided demonstration" class="h-[650px] w-full rounded-lg border bg-white" src="{{ presentation_url }}?slide=1"></iframe></div>
@@ -51,6 +51,7 @@
   ];
   const totalSeconds = steps.reduce((sum, step) => sum + step.seconds, 0);
   const frame = document.getElementById('demo-frame');
+  const player = document.getElementById('demo-player');
   const title = document.getElementById('step-title');
   const meta = document.getElementById('step-meta');
   const status = document.getElementById('demo-status');
@@ -58,10 +59,16 @@
   const pause = document.getElementById('pause-demo');
   const restart = document.getElementById('restart-demo');
   const record = document.getElementById('record-demo');
-  let index = 0, elapsed = 0, timer = null, running = false, recorder = null, chunks = [], stream = null;
+  let index = 0, elapsed = 0, timer = null, running = false, recorder = null, chunks = [], stream = null, preferredVoice = null;
   const format = seconds => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   const update = () => { const step = steps[index] || steps.at(-1); title.textContent = step ? step.title : 'Tour complete'; meta.textContent = `${format(elapsed)} / ${format(totalSeconds)}`; };
-  const narrate = text => { if (!('speechSynthesis' in window)) return; window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(text); utterance.lang = 'en-US'; utterance.rate = 1.06; window.speechSynthesis.speak(utterance); };
+  const selectVoice = () => {
+    if (!('speechSynthesis' in window)) return;
+    const voices = window.speechSynthesis.getVoices();
+    const friendlyNames = /zira|jenny|aria|ava|samantha|victoria|karen|moira|tessa|fiona|serena|hazel|susan|female|woman/i;
+    preferredVoice = voices.find(voice => friendlyNames.test(voice.name) && voice.lang.toLowerCase().startsWith('en')) || voices.find(voice => voice.lang.toLowerCase().startsWith('en')) || voices[0] || null;
+  };
+  const narrate = text => { if (!('speechSynthesis' in window)) return; selectVoice(); window.speechSynthesis.cancel(); const utterance = new SpeechSynthesisUtterance(text); utterance.lang = preferredVoice?.lang || 'en-US'; utterance.voice = preferredVoice; utterance.rate = 0.98; utterance.pitch = 1.04; window.speechSynthesis.speak(utterance); };
   const stopTimer = () => { if (timer) window.clearTimeout(timer); timer = null; running = false; };
   const finish = () => { stopTimer(); if ('speechSynthesis' in window) window.speechSynthesis.cancel(); title.textContent = 'Tour complete'; meta.textContent = `${format(totalSeconds)} / ${format(totalSeconds)}`; status.textContent = recorder && recorder.state === 'recording' ? 'Tour complete. Converting your recording to MP4…' : 'Tour complete. Review it, then record again or export a fresh take.'; if (recorder && recorder.state === 'recording') recorder.stop(); };
   const run = () => { if (index >= steps.length) return finish(); const step = steps[index]; running = true; frame.src = step.url; update(); status.textContent = `Showing ${step.title}.`; narrate(step.narration); timer = window.setTimeout(() => { elapsed += step.seconds; index += 1; run(); }, step.seconds * 1000); };
@@ -76,7 +83,7 @@
       if (!response.ok) throw new Error(await response.text());
       const blob = await response.blob(), link = document.createElement('a'); link.href = URL.createObjectURL(blob); link.download = 'elefthero-demo.mp4'; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(link.href); status.textContent = 'MP4 downloaded. Review it before uploading it publicly to YouTube.';
     } catch (error) { status.textContent = `MP4 export failed: ${error.message || 'unknown error'}`; }
-    finally { stream?.getTracks().forEach(track => track.stop()); stream = null; recorder = null; chunks = []; record.disabled = false; }
+    finally { stream?.getTracks().forEach(track => track.stop()); stream = null; recorder = null; chunks = []; record.disabled = false; if (document.fullscreenElement === player) document.exitFullscreen?.(); }
   };
   start.addEventListener('click', begin);
   pause.addEventListener('click', () => { if (running) { stopTimer(); if ('speechSynthesis' in window) window.speechSynthesis.pause(); pause.textContent = 'Resume'; status.textContent = 'Tour paused.'; } else { if ('speechSynthesis' in window) window.speechSynthesis.resume(); pause.textContent = 'Pause'; begin(); } });
@@ -84,13 +91,20 @@
   record.addEventListener('click', async () => {
     if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) { status.textContent = 'This browser cannot record a screen share. Use a current Chrome or Edge browser.'; return; }
     try {
+      if (player.requestFullscreen) await player.requestFullscreen();
       stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: true}); chunks = [];
       const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
       recorder = new MediaRecorder(stream, {mimeType}); recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); }; recorder.onstop = downloadMp4;
       stream.getVideoTracks()[0].addEventListener('ended', () => { if (recorder?.state === 'recording') recorder.stop(); }); recorder.start(1000); record.disabled = true; status.textContent = 'Recording. Keep this tab selected and let the guided tour complete.'; reset(); begin();
     } catch (_) { status.textContent = 'Screen-recording permission was not granted.'; }
   });
+  if ('speechSynthesis' in window) { selectVoice(); window.speechSynthesis.addEventListener?.('voiceschanged', selectVoice); }
   update();
 })();
 </script>
+<style>
+  #demo-player:fullscreen { width: 100vw; height: 100vh; border: 0; border-radius: 0; display: flex; flex-direction: column; background: #f8fafc; }
+  #demo-player:fullscreen > div:nth-child(2) { flex: 1; padding: 1rem; }
+  #demo-player:fullscreen #demo-frame { height: 100%; }
+</style>
 {% endblock %}

@@ -119,6 +119,6 @@ git diff --check
 
 ## Recording the Devpost demonstration
 
-Sign in as an administrator and open **Demo** from the navigation. The timed run combines the landing-page presentation with a guided tour of the application and uses browser text-to-speech for audio. Choose **Record and export MP4**, select **This tab** in Chrome or Edge, and enable **Share tab audio**. At the end, Elefthero uploads the WebM recording to the server and uses FFmpeg to download an MP4.
+Sign in as an administrator and open **Demo** from the navigation. The timed run combines the landing-page presentation with a guided tour of the application and uses the browser’s most natural available English voice, preferring familiar female system voices where available. Choose **Record full-screen and export MP4**; Elefthero enters full-screen presentation mode, then select **This tab** in Chrome or Edge and enable **Share tab audio**. At the end, Elefthero uploads the WebM recording to the server and uses FFmpeg to download an MP4.
 
 Review the recording before publishing it. Uploading it to YouTube is intentionally manual: it requires the project owner to authorize their own account and select public visibility.
