@@ -18,6 +18,7 @@
       <div><p id="step-title" class="font-bold">Ready to begin</p><p id="step-meta" class="text-sm text-slate-600">0:00 / 2:53</p></div>
       <div class="flex flex-wrap gap-2">
         <button id="start-demo" class="rounded-lg bg-cyan-700 px-4 py-2 font-semibold text-white">Start tour</button>
+        <button id="fullscreen-demo" class="rounded-lg border px-4 py-2 font-semibold">Full screen presentation</button>
         <button id="pause-demo" class="rounded-lg border px-4 py-2 font-semibold">Pause</button>
         <button id="restart-demo" class="rounded-lg border px-4 py-2 font-semibold">Restart</button>
         <button id="record-demo" class="rounded-lg border border-cyan-700 px-4 py-2 font-semibold text-cyan-800">Record full-screen &amp; export MP4</button>
@@ -56,6 +57,7 @@
   const meta = document.getElementById('step-meta');
   const status = document.getElementById('demo-status');
   const start = document.getElementById('start-demo');
+  const fullscreen = document.getElementById('fullscreen-demo');
   const pause = document.getElementById('pause-demo');
   const restart = document.getElementById('restart-demo');
   const record = document.getElementById('record-demo');
@@ -67,6 +69,11 @@
   const advance = () => { if (!running) return; elapsed += steps[index].seconds; index += 1; run(); };
   const narrate = async step => { narration.pause(); narration.currentTime = 0; narration.src = {{ url_for('demo_audio', step=999)|tojson }}.replace('999', String(step)); narration.onended = advance; narration.onerror = () => { status.textContent = 'The local Kokoro narration audio is unavailable. Moving to the next screen shortly.'; timer = window.setTimeout(advance, steps[step].seconds * 1000); }; try { await narration.play(); } catch (_) { narration.onerror(); } };
   const stopTimer = () => { if (timer) window.clearTimeout(timer); timer = null; running = false; };
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenEnabled) { status.textContent = 'Full-screen presentation is not available in this browser.'; return; }
+    if (document.fullscreenElement === player) { await document.exitFullscreen(); return; }
+    await player.requestFullscreen();
+  };
   const finish = () => { stopTimer(); narration.pause(); title.textContent = 'Tour complete'; meta.textContent = `${format(totalSeconds)} / ${format(totalSeconds)}`; status.textContent = recorder && recorder.state === 'recording' ? 'Tour complete. Converting your recording to MP4…' : 'Tour complete. Review it, then record again or export a fresh take.'; if (recorder && recorder.state === 'recording') recorder.stop(); };
   const run = () => { if (index >= steps.length) return finish(); const step = steps[index]; running = true; paused = false; frame.src = step.url; update(); status.textContent = `Showing ${step.title}.`; narrate(index); };
   const begin = () => { if (running) return; if (paused) { running = true; paused = false; narration.play().catch(() => run()); return; } if (index >= steps.length) { index = 0; elapsed = 0; } run(); };
@@ -83,18 +90,20 @@
     finally { stream?.getTracks().forEach(track => track.stop()); stream = null; recorder = null; chunks = []; record.disabled = false; if (document.fullscreenElement === player) document.exitFullscreen?.(); }
   };
   start.addEventListener('click', begin);
+  fullscreen.addEventListener('click', () => toggleFullscreen().catch(() => { status.textContent = 'Full-screen presentation could not be started.'; }));
   pause.addEventListener('click', () => { if (running) { stopTimer(); running = false; paused = true; narration.pause(); pause.textContent = 'Resume'; status.textContent = 'Tour paused.'; } else { pause.textContent = 'Pause'; begin(); } });
   restart.addEventListener('click', reset);
   record.addEventListener('click', async () => {
     if (!navigator.mediaDevices?.getDisplayMedia || !window.MediaRecorder) { status.textContent = 'This browser cannot record a screen share. Use a current Chrome or Edge browser.'; return; }
     try {
-      if (player.requestFullscreen) await player.requestFullscreen();
+      if (document.fullscreenElement !== player) await toggleFullscreen();
       stream = await navigator.mediaDevices.getDisplayMedia({video: true, audio: true}); chunks = [];
       const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') ? 'video/webm;codecs=vp9,opus' : 'video/webm';
       recorder = new MediaRecorder(stream, {mimeType}); recorder.ondataavailable = event => { if (event.data.size) chunks.push(event.data); }; recorder.onstop = downloadMp4;
       stream.getVideoTracks()[0].addEventListener('ended', () => { if (recorder?.state === 'recording') recorder.stop(); }); recorder.start(1000); record.disabled = true; status.textContent = 'Recording. Keep this tab selected and let the guided tour complete.'; reset(); begin();
     } catch (_) { status.textContent = 'Screen-recording permission was not granted.'; }
   });
+  document.addEventListener('fullscreenchange', () => { fullscreen.textContent = document.fullscreenElement === player ? 'Exit full screen' : 'Full screen presentation'; });
   update();
 })();
 </script>
