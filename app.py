@@ -155,6 +155,7 @@ def invoice_xml(invoice):
         total_net += Decimal(line.net); total_vat += vat_amount
     summary = SubElement(inv, "invoiceSummary")
     SubElement(summary, "totalNetValue").text, SubElement(summary, "totalVatAmount").text = f"{total_net:.2f}", f"{total_vat:.2f}"
+    for field in ("totalWithheldAmount", "totalFeesAmount", "totalStampDutyAmount", "totalOtherTaxesAmount", "totalDeductionsAmount"): SubElement(summary, field).text = "0.00"
     SubElement(summary, "totalGrossValue").text = f"{total_net + total_vat:.2f}"
     return tostring(root, encoding="utf-8", xml_declaration=True)
 
@@ -226,7 +227,7 @@ def logs(): require_admin(); return render_template("logs.html", logs=ActivityLo
 @app.get("/invoices/<int:invoice_id>/pdf")
 def invoice_pdf(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id); path = os.path.join(app.instance_path, f"invoice-{invoice.id}.pdf"); lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).all(); font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"; pdfmetrics.registerFont(TTFont("SiraSans", font_path))
-    canvas = Canvas(path, pagesize=A4); canvas.setFillColor(HexColor("#ffffff")); canvas.rect(0, 0, 595, 842, fill=1, stroke=0); canvas.setFillColor(HexColor("#1e293b")); canvas.setFont("SiraSans", 24); canvas.drawString(42, 795, "myAade"); canvas.setFont("SiraSans", 12); canvas.drawString(42, 765, f"ΠΑΡΑΣΤΑΤΙΚΟ {invoice.number} · {invoice.issue_date.isoformat()}"); canvas.drawString(42, 730, f"ΠΕΛΑΤΗΣ: {invoice.customer}"); canvas.drawString(42, 710, f"ΑΦΜ: {invoice.vat_number} · Τύπος myDATA: {invoice.invoice_type}")
+    canvas = Canvas(path, pagesize=A4); canvas.setFillColor(HexColor("#ffffff")); canvas.rect(0, 0, 595, 842, fill=1, stroke=0); canvas.setFillColor(HexColor("#1e293b")); canvas.setFont("SiraSans", 24); canvas.drawString(42, 795, "myAade"); canvas.setFont("SiraSans", 12); canvas.drawString(42, 765, f"{INVOICE_TYPES.get(invoice.invoice_type, invoice.invoice_type)} · {invoice.number} · {invoice.issue_date.isoformat()}"); canvas.drawString(42, 730, f"ΠΕΛΑΤΗΣ: {invoice.customer}"); canvas.drawString(42, 710, f"ΑΦΜ: {invoice.vat_number} · Τύπος myDATA: {invoice.invoice_type}")
     y = 660; canvas.setFillColor(HexColor("#e2e8f0")); canvas.rect(42, y, 510, 25, fill=1, stroke=0); canvas.setFillColor(HexColor("#1e293b")); canvas.setFont("SiraSans", 10); canvas.drawString(50, y+8, "Α/Α"); canvas.drawString(95, y+8, "ΠΕΡΙΓΡΑΦΗ"); canvas.drawRightString(535, y+8, "ΣΥΝΟΛΟ"); canvas.setFont("SiraSans", 10)
     for index, line in enumerate(lines or [type("L", (), {"description":invoice.description,"net":invoice.net})()], 1): y -= 30; canvas.setFillColor(HexColor("#1e293b")); canvas.drawString(50, y+8, str(index)); canvas.drawString(95, y+8, str(line.description)[:65]); canvas.drawRightString(535, y+8, f"{line.net:.2f} €")
     canvas.setFont("SiraSans", 11); canvas.drawRightString(535, 150, f"ΚΑΘΑΡΗ ΑΞΙΑ: {invoice.net:.2f} €"); canvas.drawRightString(535, 125, f"Φ.Π.Α.: {invoice.vat_amount:.2f} €"); canvas.setFont("SiraSans", 15); canvas.drawRightString(535, 90, f"ΣΥΝΟΛΙΚΟ ΠΟΣΟ: {invoice.total:.2f} €"); canvas.setFont("SiraSans", 9); canvas.drawString(42, 150, "Το παρόν διαβιβάστηκε επιτυχώς στο myDATA της ΑΑΔΕ." if invoice.mydata_mark else "Πρόχειρο — δεν έχει ακόμη διαβιβαστεί στο myDATA."); canvas.drawString(42, 130, f"MARK: {invoice.mydata_mark or '-'}"); canvas.save(); audit("pdf_generated", f"Invoice {invoice.number}"); return send_file(path, as_attachment=False, download_name=f"invoice-{invoice.number}.pdf", mimetype="application/pdf")
@@ -264,6 +265,12 @@ def send_invoice(invoice_id):
     return redirect(url_for("invoice_detail", invoice_id=invoice.id))
 @app.get("/invoices")
 def invoices(): return render_template("invoices.html", invoices=Invoice.query.order_by(Invoice.created_at.desc()).all())
+@app.post("/invoices/<int:invoice_id>/delete")
+def delete_invoice(invoice_id):
+    invoice = db.get_or_404(Invoice, invoice_id)
+    if invoice.status == "transmitted": flash("A transmitted invoice cannot be deleted; cancel it through AADE.", "error")
+    else: InvoiceLine.query.filter_by(invoice_id=invoice.id).delete(); db.session.delete(invoice); db.session.commit(); audit("invoice_deleted", invoice.number); flash("Draft invoice deleted.", "success")
+    return redirect(url_for("invoices"))
 def check_vies(raw_vat):
     vat = "".join(char for char in raw_vat.upper().replace("GR", "").replace("EL", "") if char.isalnum())
     if not vat.isdigit() or len(vat) != 9: raise ValueError("Enter a 9-digit Greek VAT number.")
@@ -283,6 +290,9 @@ def clients():
         except (ValueError, requests.RequestException) as error: audit("vies_failed", str(error)); flash(f"VIES validation unavailable: {error}", "error")
         return redirect(url_for("clients"))
     return render_template("clients.html", clients=Client.query.order_by(Client.name).all())
+@app.post("/clients/<int:client_id>/delete")
+def delete_client(client_id):
+    client = db.get_or_404(Client, client_id); db.session.delete(client); db.session.commit(); audit("client_deleted", client.vat_number); flash("Client deleted.", "success"); return redirect(url_for("clients"))
 @app.post("/locale/<code>")
 def set_locale(code): session["locale"] = code if code in COPY else "en"; return redirect(request.referrer or url_for("dashboard"))
 @app.get("/health")
