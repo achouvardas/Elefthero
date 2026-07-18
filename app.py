@@ -2,7 +2,7 @@ import os
 import base64
 from datetime import date, datetime
 from decimal import Decimal
-from xml.etree.ElementTree import Element, SubElement, fromstring, tostring
+from xml.etree.ElementTree import Element, SubElement, fromstring, register_namespace, tostring
 
 import requests
 from cryptography.fernet import Fernet
@@ -60,6 +60,8 @@ INCOME_TYPES = {
     "E3_880_003": "Πωλήσεις παγίων εξωτερικού ενδοκοινοτικές",
     "E3_880_004": "Πωλήσεις παγίων εξωτερικού τρίτες χώρες",
 }
+INCOME_CLASSIFICATION_NS = "https://www.aade.gr/myDATA/incomeClassificaton/v1.0"
+register_namespace("income", INCOME_CLASSIFICATION_NS)
 INVOICE_TYPES = {
     "1.1": "Τιμολόγιο Πώλησης", "1.2": "Τιμολόγιο Πώλησης / Ενδοκοινοτικές Παραδόσεις", "1.3": "Τιμολόγιο Πώλησης / Παραδόσεις Τρίτων Χωρών", "1.4": "Τιμολόγιο Πώλησης / Λογαριασμό Τρίτων", "1.5": "Τιμολόγιο Πώλησης / Εκκαθάριση Πωλήσεων Τρίτων", "1.6": "Τιμολόγιο Πώλησης / Συμπληρωματικό", "2.1": "Τιμολόγιο Παροχής", "2.2": "Τιμολόγιο Παροχής / Ενδοκοινοτική", "2.3": "Τιμολόγιο Παροχής / Τρίτη Χώρα", "2.4": "Τιμολόγιο Παροχής / Συμπληρωματικό", "3.1": "Τίτλος Κτήσης (μη υπόχρεος Εκδότης)", "3.2": "Τίτλος Κτήσης (άρνηση έκδοσης)", "5.1": "Πιστωτικό Τιμολόγιο / Συσχετιζόμενο", "5.2": "Πιστωτικό Τιμολόγιο / Μη Συσχετιζόμενο", "6.1": "Στοιχείο Αυτοπαράδοσης", "6.2": "Στοιχείο Ιδιοχρησιμοποίησης", "7.1": "Συμβόλαιο - Έσοδο", "8.1": "Ενοίκια - Έσοδο", "8.2": "Τέλος ανθεκτικότητας κλιματικής κρίσης", "8.4": "Απόδειξη Είσπραξης POS", "8.5": "Απόδειξη Επιστροφής POS", "8.6": "Δελτίο Παραγγελίας Εστίασης", "9.1": "Δελτίο Αποστολής Συσχετιζόμενο", "9.2": "Συγκεντρωτικό Δελτίο Αποστολής", "9.3": "Δελτίο Αποστολής", "10.1": "Δελτίο Ποσοτικής Παραλαβής Συσχετιζόμενο", "10.2": "Δελτίο Ποσοτικής Παραλαβής Μη Συσχετιζόμενο", "11.1": "ΑΛΠ", "11.2": "ΑΠΥ", "11.3": "Απλοποιημένο Τιμολόγιο", "11.4": "Πιστωτικό Στοιχ. Λιανικής", "11.5": "Απόδειξη Λιανικής για Λογαριασμό Τρίτων", "13.1": "Έξοδα - Αγορές Λιανικών", "13.2": "Παροχή Λιανικών", "13.3": "Κοινόχρηστα", "13.4": "Συνδρομές", "13.30": "Παραστατικά Οντότητας ως Αναγράφονται", "13.31": "Πιστωτικό Στοιχ. Λιανικής", "14.1": "Τιμολόγιο / Ενδοκοινοτικές Αποκτήσεις", "14.2": "Τιμολόγιο / Αποκτήσεις Τρίτων Χωρών", "14.3": "Τιμολόγιο / Ενδοκοινοτική Λήψη Υπηρεσιών", "14.4": "Τιμολόγιο / Λήψη Υπηρεσιών Τρίτων Χωρών", "14.5": "ΕΦΚΑ και λοιποί Ασφαλιστικοί Οργανισμοί", "14.30": "Παραστατικά Οντότητας ως Αναγράφονται", "14.31": "Πιστωτικό ημεδαπής / αλλοδαπής", "15.1": "Συμβόλαιο - Έξοδο", "16.1": "Ενοίκιο Έξοδο", "17.1": "Μισθοδοσία", "17.2": "Αποσβέσεις", "17.3": "Λοιπές Εγγραφές Τακτοποίησης Εσόδων - Λογιστική Βάση", "17.4": "Λοιπές Εγγραφές Τακτοποίησης Εσόδων - Φορολογική Βάση", "17.5": "Λοιπές Εγγραφές Τακτοποίησης Εξόδων - Λογιστική Βάση", "17.6": "Λοιπές Εγγραφές Τακτοποίησης Εξόδων - Φορολογική Βάση",
 }
@@ -181,10 +183,7 @@ def invoice_xml(invoice):
         vat_key = str(int(vat_rate)) if vat_rate == vat_rate.to_integral() else str(vat_rate)
         SubElement(details, "vatCategory").text, SubElement(details, "vatAmount").text = VAT_CATEGORIES.get(vat_key, "7"), f"{vat_amount:.2f}"
         if vat_rate == 0: SubElement(details, "vatExemptionCategory").text = line.vat_exemption_reason
-        if line.income_category:
-            classification = SubElement(details, "incomeClassification")
-            if line.income_type: SubElement(classification, "classificationType").text = line.income_type
-            SubElement(classification, "classificationCategory").text, SubElement(classification, "amount").text = line.income_category, f"{line.net:.2f}"
+        if line.income_category: add_income_classification(details, line.income_type, line.income_category, line.net)
         total_net += Decimal(line.net); total_vat += vat_amount
     summary = SubElement(inv, "invoiceSummary")
     SubElement(summary, "totalNetValue").text, SubElement(summary, "totalVatAmount").text = f"{total_net:.2f}", f"{total_vat:.2f}"
@@ -195,11 +194,14 @@ def invoice_xml(invoice):
         if line.income_category:
             key = (line.income_type or "", line.income_category)
             classifications[key] = classifications.get(key, Decimal("0")) + Decimal(line.net)
-    for (income_type, income_category), amount in classifications.items():
-        classification = SubElement(summary, "incomeClassification")
-        if income_type: SubElement(classification, "classificationType").text = income_type
-        SubElement(classification, "classificationCategory").text, SubElement(classification, "amount").text = income_category, f"{amount:.2f}"
+    for (income_type, income_category), amount in classifications.items(): add_income_classification(summary, income_type, income_category, amount)
     return tostring(root, encoding="utf-8", xml_declaration=True)
+
+def add_income_classification(parent, income_type, income_category, amount):
+    classification = SubElement(parent, "incomeClassification")
+    if income_type: SubElement(classification, f"{{{INCOME_CLASSIFICATION_NS}}}classificationType").text = income_type
+    SubElement(classification, f"{{{INCOME_CLASSIFICATION_NS}}}classificationCategory").text = income_category
+    SubElement(classification, f"{{{INCOME_CLASSIFICATION_NS}}}amount").text = f"{Decimal(amount):.2f}"
 
 def transmit(invoice):
     mode = setting("mydata_mode", current_mode())
