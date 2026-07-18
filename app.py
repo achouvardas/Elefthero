@@ -473,6 +473,20 @@ def send_invoice(invoice_id):
         response = transmit(invoice); invoice.mydata_mark, invoice.invoice_uid, invoice.qr_url, invoice.status = response["mark"], response["uid"], response["qr_url"], "transmitted"; db.session.commit(); flash(f"Submitted successfully — ΜΑΡΚ {invoice.mydata_mark}", "success")
     except (ValueError, requests.RequestException) as error: flash(str(error), "error")
     return redirect(url_for("invoice_detail", invoice_id=invoice.id))
+@app.post("/invoices/<int:invoice_id>/cancel")
+def cancel_invoice(invoice_id):
+    invoice = db.get_or_404(Invoice, invoice_id)
+    if invoice.status != "transmitted" or not invoice.mydata_mark:
+        flash("Only transmitted invoices with a MARK can be cancelled through AADE.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
+    mode = setting("mydata_mode", current_mode()); config = ENVIRONMENTS.get(mode); user = setting(f"mydata_{mode}_user_id") or setting("mydata_user_id"); key = setting(f"mydata_{mode}_subscription_key") or setting("mydata_subscription_key")
+    if not config or not user or not key: flash("AADE credentials are missing for the selected environment.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
+    try:
+        response = requests.post(f"{config['url']}/CancelInvoice", params={"mark": invoice.mydata_mark}, headers={"aade-user-id": user, "ocp-apim-subscription-key": key}, timeout=20); response.raise_for_status(); audit("invoice_cancel_received", f"CancelInvoice response for {invoice.number}", response.text)
+        fields = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in fromstring(response.content).iter()}
+        if fields.get("statusCode") != "Success": raise ValueError(fields.get("message") or "AADE did not accept the cancellation; inspect Developer Logs.")
+        invoice.status = "cancelled"; db.session.commit(); audit("invoice_cancelled", f"AADE cancellation requested for {invoice.number}, MARK {invoice.mydata_mark}"); flash("Invoice cancelled successfully in AADE.", "success")
+    except (ValueError, requests.RequestException) as error: audit("invoice_cancel_failed", f"Invoice {invoice.number}: {error}"); flash(str(error), "error")
+    return redirect(url_for("invoice_detail", invoice_id=invoice.id))
 @app.post("/invoices/<int:invoice_id>/email")
 def email_invoice(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
