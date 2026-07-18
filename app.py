@@ -173,11 +173,11 @@ def invoice_xml(invoice):
     issuer, counterpart = SubElement(inv, "issuer"), SubElement(inv, "counterpart")
     SubElement(issuer, "vatNumber").text, SubElement(issuer, "country").text, SubElement(issuer, "branch").text = setting("business_vat", os.getenv("MYDATA_VAT_NUMBER", "")), "GR", "0"
     SubElement(counterpart, "vatNumber").text, SubElement(counterpart, "country").text, SubElement(counterpart, "branch").text = invoice.vat_number, "GR", "0"
-    payment = SubElement(inv, "paymentMethods")
-    SubElement(payment, "type").text, SubElement(payment, "amount").text = invoice.payment_method or "3", f"{invoice.total:.2f}"
     header = SubElement(inv, "invoiceHeader")
     SubElement(header, "series").text, SubElement(header, "aa").text = setting("invoice_series", "A"), invoice.number
     SubElement(header, "issueDate").text, SubElement(header, "invoiceType").text = invoice.issue_date.isoformat(), invoice.invoice_type
+    payment = SubElement(inv, "paymentMethods")
+    SubElement(payment, "type").text, SubElement(payment, "amount").text = invoice.payment_method or "3", f"{invoice.total:.2f}"
     lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).order_by(InvoiceLine.id).all()
     if not lines: lines = [type("LegacyLine", (), {"net": invoice.net, "vat_rate": invoice.vat_rate, "vat_exemption_reason": None, "income_category": None, "income_type": None})()]
     total_net, total_vat = Decimal("0"), Decimal("0")
