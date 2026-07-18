@@ -136,7 +136,7 @@ def protect_app():
     if User.query.first() and not current_user() and request.endpoint not in public: return redirect(url_for("login"))
 
 def invoice_xml(invoice):
-    root = Element("InvoicesDoc")
+    root = Element("InvoicesDoc", {"xmlns": "http://www.aade.gr/myDATA/invoice/v1.0"})
     inv = SubElement(root, "invoice")
     header = SubElement(inv, "invoiceHeader")
     SubElement(header, "series").text, SubElement(header, "aa").text = "A", invoice.number
@@ -150,7 +150,8 @@ def invoice_xml(invoice):
     for number, line in enumerate(lines, 1):
         details = SubElement(inv, "invoiceDetails"); vat_rate = Decimal(line.vat_rate); vat_amount = Decimal(line.net) * vat_rate / 100
         SubElement(details, "lineNumber").text, SubElement(details, "netValue").text = str(number), f"{line.net:.2f}"
-        SubElement(details, "vatCategory").text, SubElement(details, "vatAmount").text = VAT_CATEGORIES.get(f"{vat_rate:g}", "7"), f"{vat_amount:.2f}"
+        vat_key = str(int(vat_rate)) if vat_rate == vat_rate.to_integral() else str(vat_rate)
+        SubElement(details, "vatCategory").text, SubElement(details, "vatAmount").text = VAT_CATEGORIES.get(vat_key, "7"), f"{vat_amount:.2f}"
         if vat_rate == 0: SubElement(details, "vatExemptionCategory").text = line.vat_exemption_reason
         total_net += Decimal(line.net); total_vat += vat_amount
     summary = SubElement(inv, "invoiceSummary")
