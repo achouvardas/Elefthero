@@ -599,9 +599,12 @@ def clients():
     pagination = client_query.order_by(Client.name).paginate(page=page, per_page=12, error_out=False)
     saved_clients = pagination.items
     invoice_counts = {}
+    invoice_type_counts = {}
     for vat_number, count in db.session.query(Invoice.vat_number, func.count(Invoice.id)).group_by(Invoice.vat_number):
         invoice_counts[vat_number] = count
-    return render_template("clients.html", clients=saved_clients, invoice_counts=invoice_counts, pagination=pagination, filters=request.args, client_suggestions=Client.query.order_by(Client.name).all())
+    for vat_number, invoice_type, count in db.session.query(Invoice.vat_number, Invoice.invoice_type, func.count(Invoice.id)).filter(Invoice.status == "transmitted").group_by(Invoice.vat_number, Invoice.invoice_type):
+        invoice_type_counts.setdefault(vat_number, {})[invoice_type] = count
+    return render_template("clients.html", clients=saved_clients, invoice_counts=invoice_counts, invoice_type_counts=invoice_type_counts, invoice_types=INVOICE_TYPES, pagination=pagination, filters=request.args, client_suggestions=Client.query.order_by(Client.name).all())
 
 @app.get("/clients/<int:client_id>/invoices")
 def client_invoices(client_id):
@@ -623,7 +626,12 @@ def client_invoices(client_id):
     net_total = sum((invoice.net for invoice in client_invoice_rows), Decimal("0"))
     vat_total = sum((invoice.vat_amount for invoice in client_invoice_rows), Decimal("0"))
     gross_total = net_total + vat_total
-    return render_template("client_invoices.html", client=client, invoices=client_invoice_rows, start_date=start_raw, end_date=end_raw, net_total=net_total, vat_total=vat_total, gross_total=gross_total, invoice_types=INVOICE_TYPES)
+    type_stats = {}
+    for invoice in client_invoice_rows:
+        if invoice.status != "transmitted": continue
+        stat = type_stats.setdefault(invoice.invoice_type, {"count": 0, "net": Decimal("0"), "vat": Decimal("0"), "gross": Decimal("0")})
+        stat["count"] += 1; stat["net"] += invoice.net; stat["vat"] += invoice.vat_amount; stat["gross"] += invoice.total
+    return render_template("client_invoices.html", client=client, invoices=client_invoice_rows, start_date=start_raw, end_date=end_raw, net_total=net_total, vat_total=vat_total, gross_total=gross_total, type_stats=type_stats, invoice_types=INVOICE_TYPES)
 @app.post("/clients/<int:client_id>/delete")
 def delete_client(client_id):
     client = db.get_or_404(Client, client_id); db.session.delete(client); db.session.commit(); audit("client_deleted", client.vat_number); flash("Client deleted.", "success"); return redirect(url_for("clients"))
