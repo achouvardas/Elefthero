@@ -424,7 +424,11 @@ def new_invoice():
         db.session.commit(); audit("invoice_draft", f"Created {invoice.number}"); flash("Invoice saved as draft.", "success"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
     priority = ["1.1", "2.1", "11.1", "11.2"]
     ordered_types = dict(sorted(INVOICE_TYPES.items(), key=lambda item: (priority.index(item[0]) if item[0] in priority else 99, item[0])))
-    return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=ordered_types, next_number=setting("invoice_next_number", "1"), series=setting("invoice_series", "A"), exemption_reasons=VAT_EXEMPTION_REASONS, income_categories=INCOME_CATEGORIES, income_types=INCOME_TYPES, payment_methods=PAYMENT_METHODS)
+    seed = None
+    if request.args.get("from_invoice", type=int):
+        source = db.get_or_404(Invoice, request.args.get("from_invoice", type=int)); source_lines = InvoiceLine.query.filter_by(invoice_id=source.id).all()
+        seed = {"invoice_type": source.invoice_type, "payment_method": source.payment_method, "customer": source.customer, "vat_number": source.vat_number, "customer_address": source.customer_address or "", "customer_profession": source.customer_profession or "", "notes": source.notes or "", "lines": [{"description": line.description, "quantity": str(line.quantity), "unit_price": str(line.unit_price), "vat_rate": str(line.vat_rate), "reason": line.vat_exemption_reason or "", "category": line.income_category or "category1_3", "income_type": line.income_type or "E3_561_001"} for line in source_lines]}
+    return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=ordered_types, next_number=setting("invoice_next_number", "1"), series=setting("invoice_series", "A"), exemption_reasons=VAT_EXEMPTION_REASONS, income_categories=INCOME_CATEGORIES, income_types=INCOME_TYPES, payment_methods=PAYMENT_METHODS, seed=seed)
 
 @app.get("/invoices/<int:invoice_id>")
 def invoice_detail(invoice_id):
@@ -442,8 +446,7 @@ def create_draft_from(source, lines):
     if number.isdigit(): set_setting("invoice_next_number", str(int(number) + 1))
     db.session.commit(); audit("invoice_reused", f"Created draft {number}"); return invoice
 @app.post("/invoices/<int:invoice_id>/reuse")
-def reuse_invoice(invoice_id):
-    invoice = db.get_or_404(Invoice, invoice_id); lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).all(); return redirect(url_for("invoice_detail", invoice_id=create_draft_from(invoice, lines).id))
+def reuse_invoice(invoice_id): return redirect(url_for("new_invoice", from_invoice=invoice_id))
 @app.post("/invoices/<int:invoice_id>/save-template")
 def save_invoice_template(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
@@ -480,8 +483,8 @@ def email_invoice(invoice_id):
         with open(pdf_path, "rb") as pdf_file: encoded_pdf = base64.b64encode(pdf_file.read()).decode()
         business = setting("business_legal_name", "") or "Your business"
         invoice_name = INVOICE_TYPES.get(invoice.invoice_type, invoice.invoice_type)
-        html = f"<h2>Νέο παραστατικό από {escape(business)}</h2><p>Προς: {escape(invoice.customer)} · ΑΦΜ: {escape(invoice.vat_number)}</p><p><b>{escape(invoice_name)}</b><br>Σειρά: {escape(setting('invoice_series','A'))} · Αριθμός: {escape(invoice.number)} · Ημερομηνία: {invoice.issue_date.strftime('%d/%m/%Y')}</p><p>Τρόπος πληρωμής: Επί πιστώσει</p><p>UID: {escape(invoice.invoice_uid or '-')}<br>ΜΑΡΚ: {escape(invoice.mydata_mark or '-')}</p><p>Καθαρή αξία: €{invoice.net:.2f}<br>ΦΠΑ: €{invoice.vat_amount:.2f}<br><b>Σύνολο: €{invoice.total:.2f}</b></p><p>Το παρόν διαβιβάστηκε επιτυχώς στο myDATA της ΑΑΔΕ.</p>"
-        payload = {"from": sender, "to": [recipient], "subject": f"{invoice_name} {invoice.number} από {business}", "html": html, "attachments": [{"filename": f"invoice-{invoice.number}.pdf", "content": encoded_pdf}]}
+        html = f"<p>Αξιότιμε/η κύριε/α,</p><p>Σας ενημερώνουμε ότι η εταιρεία <b>{escape(business)}</b> προχώρησε στην έκδοση του παρακάτω παραστατικού.</p><p><b>{escape(invoice_name)}</b><br>Σειρά: {escape(setting('invoice_series','A'))} · Α/Α: {escape(invoice.number)} · Ημερομηνία: {invoice.issue_date.strftime('%d/%m/%Y')}</p><p>Τρόπος πληρωμής: Επί πιστώσει</p><p>UID: {escape(invoice.invoice_uid or '-')}<br>ΜΑΡΚ: {escape(invoice.mydata_mark or '-')}</p><p>Καθαρή αξία: €{invoice.net:.2f}<br>ΦΠΑ: €{invoice.vat_amount:.2f}<br><b>Σύνολο: €{invoice.total:.2f}</b></p><p>Το παρόν διαβιβάστηκε επιτυχώς στο myDATA της ΑΑΔΕ.</p><hr><p style='color:#64748b;font-size:12px'>Το παρόν είναι αυτοματοποιημένο μήνυμα. Παρακαλούμε μην απαντήσετε σε αυτό το email.</p>"
+        payload = {"from": sender, "to": [recipient], "subject": f"Elefthero - Open Invoicing | Νέο παραστατικό από {business}", "html": html, "attachments": [{"filename": f"invoice-{invoice.number}.pdf", "content": encoded_pdf}]}
         response = requests.post("https://api.resend.com/emails", json=payload, headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json", "Idempotency-Key": f"elefthero-invoice-{invoice.id}-{recipient}"}, timeout=25); response.raise_for_status()
         audit("invoice_emailed", f"Invoice {invoice.number} emailed to {recipient}", response.text); flash("Invoice PDF emailed successfully.", "success")
     except (OSError, requests.RequestException) as error:
