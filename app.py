@@ -35,7 +35,8 @@ ENVIRONMENTS = {
     "production": {"label": "AADE Production", "url": "https://mydatapi.aade.gr/myDATA"},
 }
 VAT_CATEGORIES = {"24": "1", "13": "2", "6": "3", "17": "4", "9": "5", "4": "6", "0": "7", "3": "9"}
-VAT_EXEMPTION_REASONS = {str(code): f"AADE exemption reason {code}" for code in range(1, 32)}
+VAT_EXEMPTION_REASONS = {
+    "1":"Χωρίς ΦΠΑ - άρθρο 2 και 3 του Κώδικα ΦΠΑ", "2":"Χωρίς ΦΠΑ - άρθρο 5 του Κώδικα ΦΠΑ", "3":"Χωρίς ΦΠΑ - άρθρο 17 του Κώδικα ΦΠΑ", "4":"Χωρίς ΦΠΑ - άρθρο 18 του Κώδικα ΦΠΑ", "5":"Χωρίς ΦΠΑ - άρθρο 21 του Κώδικα ΦΠΑ", "6":"Χωρίς ΦΠΑ - άρθρο 24 του Κώδικα ΦΠΑ", "7":"Χωρίς ΦΠΑ - άρθρο 27 του Κώδικα ΦΠΑ", "8":"Χωρίς ΦΠΑ - άρθρο 29 του Κώδικα ΦΠΑ", "9":"Χωρίς ΦΠΑ - άρθρο 30 του Κώδικα ΦΠΑ", "10":"Χωρίς ΦΠΑ - άρθρο 31 του Κώδικα ΦΠΑ", "11":"Χωρίς ΦΠΑ - άρθρο 32 του Κώδικα ΦΠΑ", "12":"Χωρίς ΦΠΑ - άρθρο 32 του Κώδικα ΦΠΑ - Πλοία Ανοικτής Θαλάσσης", "13":"Χωρίς ΦΠΑ - άρθρο 32 παρ. 1γ - Πλοία Ανοικτής Θαλάσσης", "14":"Χωρίς ΦΠΑ - άρθρο 33 του Κώδικα ΦΠΑ", "15":"Χωρίς ΦΠΑ - άρθρο 44 του Κώδικα ΦΠΑ", "16":"Χωρίς ΦΠΑ - άρθρο 45 του Κώδικα ΦΠΑ", "17":"Χωρίς ΦΠΑ - άρθρο 47 του Κώδικα ΦΠΑ", "18":"Χωρίς ΦΠΑ - άρθρο 48 του Κώδικα ΦΠΑ", "19":"Χωρίς ΦΠΑ - άρθρο 54 του Κώδικα ΦΠΑ", "20":"ΦΠΑ εμπεριεχόμενος - άρθρο 50 του Κώδικα ΦΠΑ", "21":"ΦΠΑ εμπεριεχόμενος - άρθρο 51 του Κώδικα ΦΠΑ", "22":"ΦΠΑ εμπεριεχόμενος - άρθρο 52 του Κώδικα ΦΠΑ", "23":"ΦΠΑ εμπεριεχόμενος - άρθρο 53 του Κώδικα ΦΠΑ", "24":"Χωρίς ΦΠΑ - άρθρο 8 του Κώδικα ΦΠΑ", "25":"Χωρίς ΦΠΑ - ΠΟΛ.1029/1995", "26":"Χωρίς ΦΠΑ - ΠΟΛ.1167/2015", "27":"Λοιπές Εξαιρέσεις ΦΠΑ", "28":"Χωρίς ΦΠΑ - άρθρο 29 περ. β’ παρ.1 (Tax Free)", "29":"Χωρίς ΦΠΑ - άρθρο 56 (OSS μη ενωσιακό)", "30":"Χωρίς ΦΠΑ - άρθρο 57 (OSS ενωσιακό)", "31":"Χωρίς ΦΠΑ - άρθρο 58 (IOSS)"}
 INCOME_CATEGORIES = {
     "category1_1": "Έσοδα από πώληση εμπορευμάτων",
     "category1_2": "Έσοδα από πώληση προϊόντων",
@@ -105,6 +106,24 @@ class InvoiceLine(db.Model):
     invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id"), nullable=False, index=True)
     description = db.Column(db.String(255), nullable=False)
     net = db.Column(db.Numeric(12, 2), nullable=False)
+    quantity = db.Column(db.Numeric(12, 3), nullable=False, default=1)
+    unit_price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
+    vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=24)
+    vat_exemption_reason = db.Column(db.String(3))
+    income_category = db.Column(db.String(30))
+    income_type = db.Column(db.String(30))
+
+class InvoiceTemplate(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(120), unique=True, nullable=False)
+    invoice_type = db.Column(db.String(8), nullable=False)
+    payment_method = db.Column(db.String(2), nullable=False, default="3")
+    notes = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+class InvoiceTemplateLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    template_id = db.Column(db.Integer, db.ForeignKey("invoice_template.id"), nullable=False, index=True)
+    description = db.Column(db.String(255), nullable=False)
     quantity = db.Column(db.Numeric(12, 3), nullable=False, default=1)
     unit_price = db.Column(db.Numeric(12, 2), nullable=False, default=0)
     vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=24)
@@ -386,7 +405,10 @@ def new_invoice():
         except (ValueError, ArithmeticError): flash("Add at least one valid line and an AADE VAT exemption reason for every 0% VAT line.", "error"); return redirect(url_for("new_invoice"))
         total_net, total_vat = sum((net for _, _, _, net, _, _, _, _ in parsed), Decimal("0")), sum((net * rate / 100 for _, _, _, net, rate, _, _, _ in parsed), Decimal("0"))
         customer_address = "" if retail else request.form.get("customer_address", "").strip(); customer_profession = "" if retail else request.form.get("customer_profession", "").strip()
-        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], customer_address=customer_address, customer_profession=customer_profession, notes=request.form.get("notes", "").strip(), description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]), payment_method=payment_method)
+        exemption_notes = list(dict.fromkeys(VAT_EXEMPTION_REASONS[reason] for _, _, _, _, rate, reason, _, _ in parsed if rate == 0 and reason))
+        notes = request.form.get("notes", "").strip()
+        if exemption_notes: notes = f"{notes} - {' · '.join(exemption_notes)}" if notes else " · ".join(exemption_notes)
+        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], customer_address=customer_address, customer_profession=customer_profession, notes=notes, description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]), payment_method=payment_method)
         db.session.add(invoice)
         db.session.flush()
         for description, quantity, unit_price, net, rate, reason, category, income_type in parsed: db.session.add(InvoiceLine(invoice_id=invoice.id, description=description, quantity=quantity, unit_price=unit_price, net=net, vat_rate=rate, vat_exemption_reason=reason, income_category=category, income_type=income_type))
@@ -403,6 +425,31 @@ def invoice_detail(invoice_id):
     if not lines:
         lines = [type("LegacyLine", (), {"description": invoice.description, "net": invoice.net, "quantity": Decimal("1"), "unit_price": invoice.net, "vat_rate": invoice.vat_rate, "vat_exemption_reason": None, "income_category": None, "income_type": None})()]
     return render_template("invoice_detail.html", invoice=invoice, lines=lines, invoice_type_name=INVOICE_TYPES.get(invoice.invoice_type, "Unknown myDATA type"), payment_method_name=PAYMENT_METHODS.get(invoice.payment_method, "-"), invoice_xml_preview=invoice_xml(invoice).decode("utf-8"))
+def create_draft_from(source, lines):
+    number = setting("invoice_next_number", "1")
+    total_net = sum((Decimal(line.quantity) * Decimal(line.unit_price) for line in lines), Decimal("0")); total_vat = sum((Decimal(line.quantity) * Decimal(line.unit_price) * Decimal(line.vat_rate) / 100 for line in lines), Decimal("0"))
+    invoice = Invoice(number=number, invoice_type=source.invoice_type, customer=getattr(source, "customer", ""), vat_number=getattr(source, "vat_number", ""), customer_address=getattr(source, "customer_address", ""), customer_profession=getattr(source, "customer_profession", ""), notes=getattr(source, "notes", ""), description=lines[0].description, net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else 0), issue_date=date.today(), payment_method=source.payment_method)
+    db.session.add(invoice); db.session.flush()
+    for line in lines: db.session.add(InvoiceLine(invoice_id=invoice.id, description=line.description, quantity=line.quantity, unit_price=line.unit_price, net=Decimal(line.quantity) * Decimal(line.unit_price), vat_rate=line.vat_rate, vat_exemption_reason=line.vat_exemption_reason, income_category=line.income_category, income_type=line.income_type))
+    if number.isdigit(): set_setting("invoice_next_number", str(int(number) + 1))
+    db.session.commit(); audit("invoice_reused", f"Created draft {number}"); return invoice
+@app.post("/invoices/<int:invoice_id>/reuse")
+def reuse_invoice(invoice_id):
+    invoice = db.get_or_404(Invoice, invoice_id); lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).all(); return redirect(url_for("invoice_detail", invoice_id=create_draft_from(invoice, lines).id))
+@app.post("/invoices/<int:invoice_id>/save-template")
+def save_invoice_template(invoice_id):
+    invoice = db.get_or_404(Invoice, invoice_id)
+    if invoice.status != "transmitted": flash("Only transmitted invoices can be saved as templates.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
+    name = request.form.get("template_name", "").strip()
+    if not name or InvoiceTemplate.query.filter_by(name=name).first(): flash("Provide a unique template name.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
+    template = InvoiceTemplate(name=name, invoice_type=invoice.invoice_type, payment_method=invoice.payment_method, notes=invoice.notes); db.session.add(template); db.session.flush()
+    for line in InvoiceLine.query.filter_by(invoice_id=invoice.id): db.session.add(InvoiceTemplateLine(template_id=template.id, description=line.description, quantity=line.quantity, unit_price=line.unit_price, vat_rate=line.vat_rate, vat_exemption_reason=line.vat_exemption_reason, income_category=line.income_category, income_type=line.income_type))
+    db.session.commit(); audit("template_saved", name); flash("Invoice template saved.", "success"); return redirect(url_for("templates"))
+@app.get("/templates")
+def templates(): return render_template("templates.html", templates=InvoiceTemplate.query.order_by(InvoiceTemplate.created_at.desc()).all(), invoice_types=INVOICE_TYPES)
+@app.post("/templates/<int:template_id>/use")
+def use_template(template_id):
+    template = db.get_or_404(InvoiceTemplate, template_id); lines = InvoiceTemplateLine.query.filter_by(template_id=template.id).all(); return redirect(url_for("invoice_detail", invoice_id=create_draft_from(template, lines).id))
 @app.post("/invoices/<int:invoice_id>/send")
 def send_invoice(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
@@ -500,7 +547,7 @@ def client_invoices(client_id):
     net_total = sum((invoice.net for invoice in client_invoice_rows), Decimal("0"))
     vat_total = sum((invoice.vat_amount for invoice in client_invoice_rows), Decimal("0"))
     gross_total = net_total + vat_total
-    return render_template("client_invoices.html", client=client, invoices=client_invoice_rows, start_date=start_raw, end_date=end_raw, net_total=net_total, vat_total=vat_total, gross_total=gross_total)
+    return render_template("client_invoices.html", client=client, invoices=client_invoice_rows, start_date=start_raw, end_date=end_raw, net_total=net_total, vat_total=vat_total, gross_total=gross_total, invoice_types=INVOICE_TYPES)
 @app.post("/clients/<int:client_id>/delete")
 def delete_client(client_id):
     client = db.get_or_404(Client, client_id); db.session.delete(client); db.session.commit(); audit("client_deleted", client.vat_number); flash("Client deleted.", "success"); return redirect(url_for("clients"))
