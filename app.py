@@ -27,6 +27,7 @@ db = SQLAlchemy(app)
 ENVIRONMENTS = {
     "local": {"label": "Local simulation", "url": None, "safe": True},
     "demo": {"label": "Demo / AADE Test", "url": "https://mydataapidev.aade.gr", "safe": True},
+    "development": {"label": "Demo / AADE Test", "url": "https://mydataapidev.aade.gr", "safe": True},
     "production": {"label": "AADE Production", "url": "https://mydatapi.aade.gr/myDATA", "safe": False},
 }
 VAT_CATEGORIES = {"24": "1", "13": "2", "6": "3", "17": "4", "9": "5", "4": "6", "0": "7", "3": "9"}
@@ -256,9 +257,9 @@ def send_invoice(invoice_id):
 @app.get("/invoices")
 def invoices(): return render_template("invoices.html", invoices=Invoice.query.order_by(Invoice.created_at.desc()).all())
 def check_vies(raw_vat):
-    vat = "".join(char for char in raw_vat.upper().replace("GR", "") if char.isalnum())
+    vat = "".join(char for char in raw_vat.upper().replace("GR", "").replace("EL", "") if char.isalnum())
     if not vat.isdigit() or len(vat) != 9: raise ValueError("Enter a 9-digit Greek VAT number.")
-    payload = f'<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><soapenv:Body><urn:checkVat><urn:countryCode>GR</urn:countryCode><urn:vatNumber>{vat}</urn:vatNumber></urn:checkVat></soapenv:Body></soapenv:Envelope>'
+    payload = f'<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><soapenv:Body><urn:checkVat><urn:countryCode>EL</urn:countryCode><urn:vatNumber>{vat}</urn:vatNumber></urn:checkVat></soapenv:Body></soapenv:Envelope>'
     response = requests.post("https://ec.europa.eu/taxation_customs/vies/services/checkVatService", data=payload.encode(), headers={"Content-Type": "text/xml; charset=utf-8"}, timeout=12); response.raise_for_status()
     fields = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in fromstring(response.content).iter()}
     if fields.get("valid", "false").lower() != "true": raise ValueError("VIES returned no valid registration. The VAT format may be valid; check VIES/AADE status and retry later.")
