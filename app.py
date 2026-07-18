@@ -25,10 +25,12 @@ app.config.update(
 db = SQLAlchemy(app)
 
 ENVIRONMENTS = {
-    "demo": {"label": "Demo", "url": None, "safe": True},
-    "development": {"label": "AADE Test", "url": "https://mydataapidev.aade.gr", "safe": False},
+    "local": {"label": "Local simulation", "url": None, "safe": True},
+    "demo": {"label": "Demo / AADE Test", "url": "https://mydataapidev.aade.gr", "safe": True},
     "production": {"label": "AADE Production", "url": "https://mydatapi.aade.gr/myDATA", "safe": False},
 }
+VAT_CATEGORIES = {"24": "1", "13": "2", "6": "3", "17": "4", "9": "5", "4": "6", "0": "7", "3": "9"}
+VAT_EXEMPTION_REASONS = {str(code): f"AADE exemption reason {code}" for code in range(1, 32)}
 INVOICE_TYPES = {
     "1.1": "Τιμολόγιο Πώλησης", "1.2": "Τιμολόγιο Πώλησης / Ενδοκοινοτικές Παραδόσεις", "1.3": "Τιμολόγιο Πώλησης / Παραδόσεις Τρίτων Χωρών", "1.4": "Τιμολόγιο Πώλησης / Λογαριασμό Τρίτων", "1.5": "Τιμολόγιο Πώλησης / Εκκαθάριση Πωλήσεων Τρίτων", "1.6": "Τιμολόγιο Πώλησης / Συμπληρωματικό", "2.1": "Τιμολόγιο Παροχής", "2.2": "Τιμολόγιο Παροχής / Ενδοκοινοτική", "2.3": "Τιμολόγιο Παροχής / Τρίτη Χώρα", "2.4": "Τιμολόγιο Παροχής / Συμπληρωματικό", "3.1": "Τίτλος Κτήσης (μη υπόχρεος Εκδότης)", "3.2": "Τίτλος Κτήσης (άρνηση έκδοσης)", "5.1": "Πιστωτικό Τιμολόγιο / Συσχετιζόμενο", "5.2": "Πιστωτικό Τιμολόγιο / Μη Συσχετιζόμενο", "6.1": "Στοιχείο Αυτοπαράδοσης", "6.2": "Στοιχείο Ιδιοχρησιμοποίησης", "7.1": "Συμβόλαιο - Έσοδο", "8.1": "Ενοίκια - Έσοδο", "8.2": "Τέλος ανθεκτικότητας κλιματικής κρίσης", "8.4": "Απόδειξη Είσπραξης POS", "8.5": "Απόδειξη Επιστροφής POS", "8.6": "Δελτίο Παραγγελίας Εστίασης", "9.1": "Δελτίο Αποστολής Συσχετιζόμενο", "9.2": "Συγκεντρωτικό Δελτίο Αποστολής", "9.3": "Δελτίο Αποστολής", "10.1": "Δελτίο Ποσοτικής Παραλαβής Συσχετιζόμενο", "10.2": "Δελτίο Ποσοτικής Παραλαβής Μη Συσχετιζόμενο", "11.1": "ΑΛΠ", "11.2": "ΑΠΥ", "11.3": "Απλοποιημένο Τιμολόγιο", "11.4": "Πιστωτικό Στοιχ. Λιανικής", "11.5": "Απόδειξη Λιανικής για Λογαριασμό Τρίτων", "13.1": "Έξοδα - Αγορές Λιανικών", "13.2": "Παροχή Λιανικών", "13.3": "Κοινόχρηστα", "13.4": "Συνδρομές", "13.30": "Παραστατικά Οντότητας ως Αναγράφονται", "13.31": "Πιστωτικό Στοιχ. Λιανικής", "14.1": "Τιμολόγιο / Ενδοκοινοτικές Αποκτήσεις", "14.2": "Τιμολόγιο / Αποκτήσεις Τρίτων Χωρών", "14.3": "Τιμολόγιο / Ενδοκοινοτική Λήψη Υπηρεσιών", "14.4": "Τιμολόγιο / Λήψη Υπηρεσιών Τρίτων Χωρών", "14.5": "ΕΦΚΑ και λοιποί Ασφαλιστικοί Οργανισμοί", "14.30": "Παραστατικά Οντότητας ως Αναγράφονται", "14.31": "Πιστωτικό ημεδαπής / αλλοδαπής", "15.1": "Συμβόλαιο - Έξοδο", "16.1": "Ενοίκιο Έξοδο", "17.1": "Μισθοδοσία", "17.2": "Αποσβέσεις", "17.3": "Λοιπές Εγγραφές Τακτοποίησης Εσόδων - Λογιστική Βάση", "17.4": "Λοιπές Εγγραφές Τακτοποίησης Εσόδων - Φορολογική Βάση", "17.5": "Λοιπές Εγγραφές Τακτοποίησης Εξόδων - Λογιστική Βάση", "17.6": "Λοιπές Εγγραφές Τακτοποίησης Εξόδων - Φορολογική Βάση",
 }
@@ -55,6 +57,14 @@ class Invoice(db.Model):
     def vat_amount(self): return self.net * self.vat_rate / 100
     @property
     def total(self): return self.net + self.vat_amount
+
+class InvoiceLine(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id"), nullable=False, index=True)
+    description = db.Column(db.String(255), nullable=False)
+    net = db.Column(db.Numeric(12, 2), nullable=False)
+    vat_rate = db.Column(db.Numeric(5, 2), nullable=False, default=24)
+    vat_exemption_reason = db.Column(db.String(3))
 
 class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -131,18 +141,24 @@ def invoice_xml(invoice):
     issuer, counterpart = SubElement(inv, "issuer"), SubElement(inv, "counterpart")
     SubElement(issuer, "vatNumber").text = os.getenv("MYDATA_VAT_NUMBER", "")
     SubElement(counterpart, "vatNumber").text = invoice.vat_number
-    details = SubElement(inv, "invoiceDetails")
-    SubElement(details, "lineNumber").text, SubElement(details, "netValue").text = "1", f"{invoice.net:.2f}"
-    SubElement(details, "vatCategory").text, SubElement(details, "vatAmount").text = "1", f"{invoice.vat_amount:.2f}"
+    lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).order_by(InvoiceLine.id).all()
+    if not lines: lines = [type("LegacyLine", (), {"net": invoice.net, "vat_rate": invoice.vat_rate, "vat_exemption_reason": None})()]
+    total_net, total_vat = Decimal("0"), Decimal("0")
+    for number, line in enumerate(lines, 1):
+        details = SubElement(inv, "invoiceDetails"); vat_rate = Decimal(line.vat_rate); vat_amount = Decimal(line.net) * vat_rate / 100
+        SubElement(details, "lineNumber").text, SubElement(details, "netValue").text = str(number), f"{line.net:.2f}"
+        SubElement(details, "vatCategory").text, SubElement(details, "vatAmount").text = VAT_CATEGORIES.get(f"{vat_rate:g}", "7"), f"{vat_amount:.2f}"
+        if vat_rate == 0: SubElement(details, "vatExemptionCategory").text = line.vat_exemption_reason
+        total_net += Decimal(line.net); total_vat += vat_amount
     summary = SubElement(inv, "invoiceSummary")
-    SubElement(summary, "totalNetValue").text, SubElement(summary, "totalVatAmount").text = f"{invoice.net:.2f}", f"{invoice.vat_amount:.2f}"
-    SubElement(summary, "totalGrossValue").text = f"{invoice.total:.2f}"
+    SubElement(summary, "totalNetValue").text, SubElement(summary, "totalVatAmount").text = f"{total_net:.2f}", f"{total_vat:.2f}"
+    SubElement(summary, "totalGrossValue").text = f"{total_net + total_vat:.2f}"
     return tostring(root, encoding="utf-8", xml_declaration=True)
 
 def transmit(invoice):
     mode = setting("mydata_mode", current_mode())
     xml = invoice_xml(invoice)
-    if mode == "demo":
+    if mode == "local":
         mark = "DEMO-" + uuid.uuid4().hex[:10].upper(); audit("xml_sent", f"Demo SendInvoices for {invoice.number}", xml.decode()); audit("xml_received", f"Demo response for {invoice.number}", f"<response><mark>{mark}</mark></response>"); return mark
     config = ENVIRONMENTS.get(mode)
     user, key = setting("mydata_user_id"), setting("mydata_subscription_key")
@@ -212,11 +228,21 @@ def new_invoice():
     if request.method == "POST":
         invoice_type = request.form["invoice_type"]
         if invoice_type not in INVOICE_TYPES: flash("Invalid AADE invoice type.", "error"); return redirect(url_for("new_invoice"))
-        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer=request.form["customer"], vat_number=request.form["vat_number"], description=request.form["description"], net=Decimal(request.form["net"]), vat_rate=Decimal(request.form["vat_rate"]), issue_date=date.fromisoformat(request.form["issue_date"]))
+        descriptions, nets, rates, reasons = request.form.getlist("line_description"), request.form.getlist("line_net"), request.form.getlist("line_vat_rate"), request.form.getlist("line_vat_exemption_reason")
+        try:
+            parsed = [(description, Decimal(net), Decimal(rate), reason if Decimal(rate) == 0 else None) for description, net, rate, reason in zip(descriptions, nets, rates, reasons)]
+            if not parsed or any(rate == 0 and reason not in VAT_EXEMPTION_REASONS for _, _, rate, reason in parsed): raise ValueError
+        except (ValueError, ArithmeticError): flash("Add at least one valid line and an AADE VAT exemption reason for every 0% VAT line.", "error"); return redirect(url_for("new_invoice"))
+        total_net, total_vat = sum((net for _, net, _, _ in parsed), Decimal("0")), sum((net * rate / 100 for _, net, rate, _ in parsed), Decimal("0"))
+        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer=request.form["customer"], vat_number=request.form["vat_number"], description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]))
         db.session.add(invoice)
+        db.session.flush()
+        for description, net, rate, reason in parsed: db.session.add(InvoiceLine(invoice_id=invoice.id, description=description, net=net, vat_rate=rate, vat_exemption_reason=reason))
         if request.form["number"].isdigit(): set_setting("invoice_next_number", str(int(request.form["number"]) + 1))
         db.session.commit(); audit("invoice_draft", f"Created {invoice.number}"); flash("Invoice saved as draft.", "success"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
-    return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=INVOICE_TYPES, next_number=setting("invoice_next_number", "1"), series=setting("invoice_series", "A"))
+    priority = ["1.1", "2.1", "11.1", "11.2"]
+    ordered_types = dict(sorted(INVOICE_TYPES.items(), key=lambda item: (priority.index(item[0]) if item[0] in priority else 99, item[0])))
+    return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=ordered_types, next_number=setting("invoice_next_number", "1"), series=setting("invoice_series", "A"), exemption_reasons=VAT_EXEMPTION_REASONS)
 
 @app.get("/invoices/<int:invoice_id>")
 def invoice_detail(invoice_id): return render_template("invoice_detail.html", invoice=db.get_or_404(Invoice, invoice_id))
@@ -235,7 +261,7 @@ def check_vies(raw_vat):
     payload = f'<soapenv:Envelope xmlns:soapenv="http://schemas.xmlsoap.org/soap/envelope/" xmlns:urn="urn:ec.europa.eu:taxud:vies:services:checkVat:types"><soapenv:Body><urn:checkVat><urn:countryCode>GR</urn:countryCode><urn:vatNumber>{vat}</urn:vatNumber></urn:checkVat></soapenv:Body></soapenv:Envelope>'
     response = requests.post("https://ec.europa.eu/taxation_customs/vies/services/checkVatService", data=payload.encode(), headers={"Content-Type": "text/xml; charset=utf-8"}, timeout=12); response.raise_for_status()
     fields = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in fromstring(response.content).iter()}
-    if fields.get("valid", "false").lower() != "true": raise ValueError("VIES could not validate this Greek VAT number.")
+    if fields.get("valid", "false").lower() != "true": raise ValueError("VIES returned no valid registration. The VAT format may be valid; check VIES/AADE status and retry later.")
     return vat, fields.get("name", "Verified Greek business"), fields.get("address", "")
 @app.route("/clients", methods=["GET", "POST"])
 def clients():
@@ -245,7 +271,7 @@ def clients():
             if client: client.name, client.address, client.vies_checked_at = name, address, datetime.utcnow()
             else: db.session.add(Client(name=name, vat_number=vat, address=address))
             db.session.commit(); flash(f"{name} verified with VIES and saved.", "success")
-        except (ValueError, requests.RequestException) as error: flash(f"VIES validation unavailable: {error}", "error")
+        except (ValueError, requests.RequestException) as error: audit("vies_failed", str(error)); flash(f"VIES validation unavailable: {error}", "error")
         return redirect(url_for("clients"))
     return render_template("clients.html", clients=Client.query.order_by(Client.name).all())
 @app.post("/locale/<code>")
