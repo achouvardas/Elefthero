@@ -14,6 +14,9 @@ from reportlab.lib.colors import HexColor
 from reportlab.pdfgen.canvas import Canvas
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
+from reportlab.graphics.barcode import qr
+from reportlab.graphics import renderPDF
+from reportlab.graphics.shapes import Drawing
 from werkzeug.security import check_password_hash, generate_password_hash
 from sqlalchemy import inspect, text
 
@@ -83,7 +86,10 @@ class Invoice(db.Model):
     issue_date = db.Column(db.Date, nullable=False, default=date.today)
     status = db.Column(db.String(30), nullable=False, default="draft")
     mydata_mark = db.Column(db.String(60))
+    invoice_uid = db.Column(db.String(80))
+    qr_url = db.Column(db.Text)
     payment_method = db.Column(db.String(2), nullable=False, default="3")
+    customer_address = db.Column(db.String(300))
     created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
     @property
@@ -225,7 +231,7 @@ def transmit(invoice):
     response_fields = {node.tag.rsplit("}", 1)[-1]: (node.text or "").strip() for node in fromstring(response.content).iter()}
     if response_fields.get("statusCode") != "Success" or not response_fields.get("invoiceMark"):
         raise ValueError(response_fields.get("message") or response_fields.get("errors") or "AADE did not accept the invoice; inspect received XML in Developer Logs.")
-    return response_fields["invoiceMark"]
+    return {"mark": response_fields["invoiceMark"], "uid": response_fields.get("invoiceUid", ""), "qr_url": response_fields.get("qrUrl", "")}
 
 @app.get("/")
 def dashboard():
@@ -259,11 +265,11 @@ def logout(): audit("logout"); session.clear(); return redirect(url_for("login")
 def settings():
     require_admin()
     if request.method == "POST":
-        for key, secret in [("mydata_mode", False), ("mydata_user_id", True), ("mydata_subscription_key", True), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False)]:
+        for key, secret in [("mydata_mode", False), ("mydata_user_id", True), ("mydata_subscription_key", True), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False)]:
             value = request.form.get(key, "")
             if value or not secret: set_setting(key, value, secret)
         db.session.commit(); audit("settings_updated", "Administrator updated integration and numbering settings"); flash("Settings saved. Secrets are encrypted at rest.", "success"); return redirect(url_for("settings"))
-    values = {key: setting(key) for key in ["mydata_mode", "turnstile_sitekey", "invoice_series", "invoice_next_number"]}
+    values = {key: setting(key) for key in ["mydata_mode", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat"]}
     return render_template("settings.html", values=values, configured={"mydata_user_id": bool(setting("mydata_user_id")), "mydata_subscription_key": bool(setting("mydata_subscription_key")), "turnstile_secret": bool(setting("turnstile_secret"))})
 @app.route("/business-settings", methods=["GET", "POST"])
 def business_settings():
@@ -291,10 +297,22 @@ def view_xml_log(log_id):
 @app.get("/invoices/<int:invoice_id>/pdf")
 def invoice_pdf(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id); path = os.path.join(app.instance_path, f"invoice-{invoice.id}.pdf"); lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).all(); font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"; pdfmetrics.registerFont(TTFont("SiraSans", font_path))
-    canvas = Canvas(path, pagesize=A4); canvas.setFillColor(HexColor("#ffffff")); canvas.rect(0, 0, 595, 842, fill=1, stroke=0); canvas.setFillColor(HexColor("#1e293b")); canvas.setFont("SiraSans", 24); canvas.drawString(42, 795, "myAade"); canvas.setFont("SiraSans", 12); canvas.drawString(42, 765, f"{INVOICE_TYPES.get(invoice.invoice_type, invoice.invoice_type)} · {invoice.number} · {invoice.issue_date.isoformat()}"); canvas.drawString(42, 730, f"ΠΕΛΑΤΗΣ: {invoice.customer}"); canvas.drawString(42, 710, f"ΑΦΜ: {invoice.vat_number} · Τύπος myDATA: {invoice.invoice_type}")
-    y = 660; canvas.setFillColor(HexColor("#e2e8f0")); canvas.rect(42, y, 510, 25, fill=1, stroke=0); canvas.setFillColor(HexColor("#1e293b")); canvas.setFont("SiraSans", 10); canvas.drawString(50, y+8, "Α/Α"); canvas.drawString(95, y+8, "ΠΕΡΙΓΡΑΦΗ"); canvas.drawRightString(535, y+8, "ΣΥΝΟΛΟ"); canvas.setFont("SiraSans", 10)
-    for index, line in enumerate(lines or [type("L", (), {"description":invoice.description,"net":invoice.net})()], 1): y -= 30; canvas.setFillColor(HexColor("#1e293b")); canvas.drawString(50, y+8, str(index)); canvas.drawString(95, y+8, str(line.description)[:65]); canvas.drawRightString(535, y+8, f"{line.net:.2f} €")
-    canvas.setFont("SiraSans", 11); canvas.drawRightString(535, 150, f"ΚΑΘΑΡΗ ΑΞΙΑ: {invoice.net:.2f} €"); canvas.drawRightString(535, 125, f"Φ.Π.Α.: {invoice.vat_amount:.2f} €"); canvas.setFont("SiraSans", 15); canvas.drawRightString(535, 90, f"ΣΥΝΟΛΙΚΟ ΠΟΣΟ: {invoice.total:.2f} €"); canvas.setFont("SiraSans", 9); canvas.drawString(42, 150, "Το παρόν διαβιβάστηκε επιτυχώς στο myDATA της ΑΑΔΕ." if invoice.mydata_mark else "Πρόχειρο — δεν έχει ακόμη διαβιβαστεί στο myDATA."); canvas.drawString(42, 130, f"MARK: {invoice.mydata_mark or '-'}"); canvas.save(); audit("pdf_generated", f"Invoice {invoice.number}"); return send_file(path, as_attachment=False, download_name=f"invoice-{invoice.number}.pdf", mimetype="application/pdf")
+    canvas = Canvas(path, pagesize=A4); navy, slate, pale, cyan = HexColor("#0f172a"), HexColor("#334155"), HexColor("#f1f5f9"), HexColor("#0891b2"); canvas.setFillColor(HexColor("#ffffff")); canvas.rect(0, 0, 595, 842, fill=1, stroke=0); canvas.setStrokeColor(HexColor("#cbd5e1")); canvas.setLineWidth(.8)
+    legal_name = setting("business_legal_name", ""); activity = setting("business_activity", ""); issuer_vat = setting("business_vat", ""); doy = setting("business_doy", ""); address = setting("business_address", ""); contact = " · ".join(part for part in [setting("business_email", ""), setting("business_phone", "")] if part); gemi_web = " · ".join(part for part in [f"ΓΕΜΗ: {setting('business_gemi', '')}" if setting("business_gemi", "") else "", setting("business_website", "")] if part)
+    canvas.setFillColor(navy); canvas.setFont("SiraSans", 16); canvas.drawString(42, 794, legal_name or "ΕΠΩΝΥΜΙΑ ΕΠΙΧΕΙΡΗΣΗΣ"); canvas.setFont("SiraSans", 9); canvas.setFillColor(slate)
+    for offset, text_line in enumerate([activity, f"ΑΦΜ: {issuer_vat} · ΔΟΥ: {doy}" if issuer_vat else "", address, contact, gemi_web]):
+        if text_line: canvas.drawString(42, 775 - offset * 13, text_line)
+    canvas.setFillColor(cyan); canvas.setFont("SiraSans", 15); canvas.drawRightString(552, 794, INVOICE_TYPES.get(invoice.invoice_type, invoice.invoice_type)); canvas.setFillColor(navy); canvas.setFont("SiraSans", 10); canvas.drawRightString(552, 774, f"Α/Α: {invoice.number} · Ημερομηνία {invoice.issue_date.strftime('%d/%m/%Y')}")
+    canvas.setFillColor(pale); canvas.rect(42, 665, 510, 70, fill=1, stroke=0); canvas.setFillColor(navy); canvas.setFont("SiraSans", 11); canvas.drawString(54, 712, f"ΠΕΛΑΤΗΣ: {invoice.customer}"); canvas.setFont("SiraSans", 9); canvas.drawString(54, 694, f"ΑΦΜ: {invoice.vat_number}");
+    if invoice.customer_address: canvas.drawString(54, 678, invoice.customer_address.replace("\n", ", ")[:90])
+    y = 625; canvas.setFillColor(navy); canvas.rect(42, y, 510, 26, fill=1, stroke=0); canvas.setFillColor(HexColor("#ffffff")); canvas.setFont("SiraSans", 9); canvas.drawString(52, y+9, "Α/Α"); canvas.drawString(92, y+9, "ΠΕΡΙΓΡΑΦΗ"); canvas.drawRightString(535, y+9, "ΣΥΝΟΛΟ")
+    for index, line in enumerate(lines or [type("L", (), {"description":invoice.description,"net":invoice.net})()], 1):
+        y -= 30; canvas.setFillColor(HexColor("#ffffff" if index % 2 else "#f8fafc")); canvas.rect(42, y, 510, 30, fill=1, stroke=1); canvas.setFillColor(navy); canvas.drawString(52, y+10, str(index)); canvas.drawString(92, y+10, str(line.description)[:65]); canvas.drawRightString(535, y+10, f"{line.net:.2f} €")
+    totals_y = 170; canvas.setFillColor(pale); canvas.rect(330, totals_y, 222, 82, fill=1, stroke=1); canvas.setFillColor(navy); canvas.setFont("SiraSans", 10); canvas.drawString(344, totals_y+58, "ΚΑΘΑΡΗ ΑΞΙΑ"); canvas.drawRightString(538, totals_y+58, f"{invoice.net:.2f} €"); canvas.drawString(344, totals_y+37, "Φ.Π.Α."); canvas.drawRightString(538, totals_y+37, f"{invoice.vat_amount:.2f} €"); canvas.setFont("SiraSans", 12); canvas.drawString(344, totals_y+14, "ΣΥΝΟΛΙΚΟ ΠΟΣΟ"); canvas.drawRightString(538, totals_y+14, f"{invoice.total:.2f} €")
+    canvas.setFont("SiraSans", 9); canvas.setFillColor(slate); canvas.drawString(42, 235, f"Τρόπος πληρωμής: {PAYMENT_METHODS.get(invoice.payment_method, '-')}"); canvas.drawString(42, 216, f"UID: {invoice.invoice_uid or '-'}"); canvas.drawString(42, 197, f"ΜΑΡΚ: {invoice.mydata_mark or '-'}")
+    if invoice.qr_url:
+        widget = qr.QrCodeWidget(invoice.qr_url); bounds = widget.getBounds(); size = 72; drawing = Drawing(size, size, transform=[size/(bounds[2]-bounds[0]), 0, 0, size/(bounds[3]-bounds[1]), 0, 0]); drawing.add(widget); renderPDF.draw(drawing, canvas, 42, 92); canvas.setFillColor(cyan); canvas.drawString(122, 143, "Άνοιγμα παραστατικού ΑΑΔΕ"); canvas.linkURL(invoice.qr_url, (122, 135, 310, 150), relative=0)
+    canvas.setFillColor(slate); canvas.setFont("SiraSans", 8); canvas.drawString(42, 55, "Το παρόν διαβιβάστηκε επιτυχώς στο myDATA της ΑΑΔΕ." if invoice.mydata_mark else "Πρόχειρο — δεν έχει ακόμη διαβιβαστεί στο myDATA."); canvas.save(); audit("pdf_generated", f"Invoice {invoice.number}"); return send_file(path, as_attachment=False, download_name=f"invoice-{invoice.number}.pdf", mimetype="application/pdf")
 
 @app.route("/invoices/new", methods=["GET", "POST"])
 def new_invoice():
@@ -313,7 +331,8 @@ def new_invoice():
             if not parsed or any(rate == 0 and reason not in VAT_EXEMPTION_REASONS for _, _, rate, reason, _, _ in parsed) or any(category not in INCOME_CATEGORIES or income_type not in INCOME_TYPES for _, _, _, _, category, income_type in parsed): raise ValueError
         except (ValueError, ArithmeticError): flash("Add at least one valid line and an AADE VAT exemption reason for every 0% VAT line.", "error"); return redirect(url_for("new_invoice"))
         total_net, total_vat = sum((net for _, net, _, _, _, _ in parsed), Decimal("0")), sum((net * rate / 100 for _, net, rate, _, _, _ in parsed), Decimal("0"))
-        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]), payment_method=payment_method)
+        customer_address = "" if retail else request.form.get("customer_address", "").strip()
+        invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], customer_address=customer_address, description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]), payment_method=payment_method)
         db.session.add(invoice)
         db.session.flush()
         for description, net, rate, reason, category, income_type in parsed: db.session.add(InvoiceLine(invoice_id=invoice.id, description=description, net=net, vat_rate=rate, vat_exemption_reason=reason, income_category=category, income_type=income_type))
@@ -329,7 +348,7 @@ def invoice_detail(invoice_id): return render_template("invoice_detail.html", in
 def send_invoice(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
     try:
-        invoice.mydata_mark, invoice.status = transmit(invoice), "transmitted"; db.session.commit(); flash(f"Submitted successfully — MARK {invoice.mydata_mark}", "success")
+        response = transmit(invoice); invoice.mydata_mark, invoice.invoice_uid, invoice.qr_url, invoice.status = response["mark"], response["uid"], response["qr_url"], "transmitted"; db.session.commit(); flash(f"Submitted successfully — ΜΑΡΚ {invoice.mydata_mark}", "success")
     except (ValueError, requests.RequestException) as error: flash(str(error), "error")
     return redirect(url_for("invoice_detail", invoice_id=invoice.id))
 @app.get("/invoices")
@@ -373,7 +392,8 @@ with app.app_context():
     for name, definition in {"income_category": "VARCHAR(30)", "income_type": "VARCHAR(30)"}.items():
         if name not in existing_columns: db.session.execute(text(f"ALTER TABLE invoice_line ADD COLUMN {name} {definition}"))
     invoice_columns = {column["name"] for column in inspect(db.engine).get_columns("invoice")}
-    if "payment_method" not in invoice_columns: db.session.execute(text("ALTER TABLE invoice ADD COLUMN payment_method VARCHAR(2) DEFAULT '3'"))
+    for name, definition in {"payment_method": "VARCHAR(2) DEFAULT '3'", "invoice_uid": "VARCHAR(80)", "qr_url": "TEXT", "customer_address": "VARCHAR(300)"}.items():
+        if name not in invoice_columns: db.session.execute(text(f"ALTER TABLE invoice ADD COLUMN {name} {definition}"))
     configured_mode = setting("mydata_mode", "")
     if configured_mode and configured_mode not in ENVIRONMENTS: set_setting("mydata_mode", "test")
     db.session.commit()
