@@ -290,14 +290,16 @@ def new_invoice():
     if request.method == "POST":
         invoice_type = request.form["invoice_type"]
         if invoice_type not in INVOICE_TYPES: flash("Invalid AADE invoice type.", "error"); return redirect(url_for("new_invoice"))
+        retail = invoice_type in {"11.1", "11.2", "11.3", "11.4", "11.5"}
+        default_income_category = "category1_3"
+        default_income_type = "E3_561_003" if retail else "E3_561_001"
         descriptions, nets, rates, reasons = request.form.getlist("line_description"), request.form.getlist("line_net"), request.form.getlist("line_vat_rate"), request.form.getlist("line_vat_exemption_reason")
         income_categories, income_types = request.form.getlist("line_income_category"), request.form.getlist("line_income_type")
         try:
-            parsed = [(description, Decimal(net), Decimal(rate), reason if Decimal(rate) == 0 else None, category, income_type) for description, net, rate, reason, category, income_type in zip(descriptions, nets, rates, reasons, income_categories, income_types)]
+            parsed = [(description, Decimal(net), Decimal(rate), reason if Decimal(rate) == 0 else None, category or default_income_category, income_type or default_income_type) for description, net, rate, reason, category, income_type in zip(descriptions, nets, rates, reasons, income_categories, income_types)]
             if not parsed or any(rate == 0 and reason not in VAT_EXEMPTION_REASONS for _, _, rate, reason, _, _ in parsed) or any(category not in INCOME_CATEGORIES or income_type not in INCOME_TYPES for _, _, _, _, category, income_type in parsed): raise ValueError
         except (ValueError, ArithmeticError): flash("Add at least one valid line and an AADE VAT exemption reason for every 0% VAT line.", "error"); return redirect(url_for("new_invoice"))
         total_net, total_vat = sum((net for _, net, _, _, _, _ in parsed), Decimal("0")), sum((net * rate / 100 for _, net, rate, _, _, _ in parsed), Decimal("0"))
-        retail = invoice_type in {"11.1", "11.2"}
         invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else request.form["customer"], vat_number="000000000" if retail else request.form["vat_number"], description=parsed[0][0], net=total_net, vat_rate=(total_vat / total_net * 100 if total_net else Decimal("0")), issue_date=date.fromisoformat(request.form["issue_date"]))
         db.session.add(invoice)
         db.session.flush()
