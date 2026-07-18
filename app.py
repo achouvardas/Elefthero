@@ -287,6 +287,13 @@ def users():
         else: db.session.add(User(email=email, password_hash=generate_password_hash(password), role=request.form.get("role", "user"))); db.session.commit(); audit("user_created", email); flash("User created.", "success")
         return redirect(url_for("users"))
     return render_template("users.html", users=User.query.order_by(User.created_at).all())
+@app.post("/users/<int:user_id>/delete")
+def delete_user(user_id):
+    require_admin(); user = db.get_or_404(User, user_id)
+    if user.id == current_user().id: flash("You cannot delete your own active account.", "error")
+    elif user.role == "admin" and User.query.filter_by(role="admin").count() <= 1: flash("Keep at least one administrator account.", "error")
+    else: db.session.delete(user); db.session.commit(); audit("user_deleted", user.email); flash("User deleted.", "success")
+    return redirect(url_for("users"))
 @app.get("/logs")
 def logs(): require_admin(); return render_template("logs.html", logs=ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(100).all())
 @app.get("/logs/<int:log_id>/xml")
