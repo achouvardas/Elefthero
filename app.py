@@ -337,7 +337,7 @@ def invoice_pdf(invoice_id):
     customer_profession = invoice.customer_profession or (saved_client.profession if saved_client else "")
     canvas.setFillColor(HexColor("#ffffff")); canvas.rect(42, 545, 510, 85, fill=1, stroke=1); canvas.setFillColor(navy); canvas.setFont("SiraSans", 11); canvas.drawString(54, 606, invoice.customer); canvas.setFont("SiraSans", 9); canvas.drawString(54, 587, f"ΑΦΜ: {invoice.vat_number}");
     if customer_address: canvas.drawString(54, 570, f"ΔΙΕΥΘΥΝΣΗ: {customer_address.replace(chr(10), ', ')[:78]}")
-    if customer_profession: canvas.drawString(54, 557, f"ΕΠΑΓΓΕΛΜΑ: {customer_profession}"[:90])
+    if customer_profession: canvas.drawString(54, 557, customer_profession[:90])
     y = 510; canvas.setFillColor(navy); canvas.rect(42, y, 510, 26, fill=1, stroke=0); canvas.setFillColor(HexColor("#ffffff")); canvas.drawString(52, y+9, "Α/Α"); canvas.drawString(92, y+9, "ΠΕΡΙΓΡΑΦΗ"); canvas.drawRightString(380, y+9, "ΚΑΘ. ΑΞΙΑ"); canvas.drawRightString(430, y+9, "ΦΠΑ %"); canvas.drawRightString(480, y+9, "ΦΠΑ €"); canvas.drawRightString(535, y+9, "ΣΥΝΟΛΟ")
     line_net_total, line_vat_total = Decimal("0"), Decimal("0")
     for index, line in enumerate(pdf_lines, 1):
