@@ -1,5 +1,14 @@
 # Elefthero
 
+## Recent product capabilities
+
+- AADE Test and Production credential pairs, encrypted at rest and selected by environment.
+- Multi-line invoices with decimal quantity × unit price, VAT exemptions, income classifications, PDF notes, XML inspection and AADE MARK/UID/QR handling.
+- Saved clients with VIES and ΓΕΜΗ enrichment, filtering, pagination and per-client invoice analytics.
+- Reusable invoice templates plus an editable “reuse as new draft” workflow.
+- Resend-based, manually initiated delivery of AADE-transmitted invoice PDFs; the API key is stored only in encrypted application settings, never in this repository.
+- Dashboard reporting for transmitted turnover, VAT and top customers.
+
 ## The open-source way to invoice in Greece.
 
 Elefthero (Ελεύθερο) is a self-hosted, bilingual invoicing workspace for Greek small businesses. It makes AADE myDATA reporting understandable, inspectable, and accessible—without locking a business into an expensive proprietary accounting platform.
