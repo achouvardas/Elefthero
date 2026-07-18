@@ -201,7 +201,10 @@ def require_admin():
     if not current_user() or current_user().role != "admin": abort(403)
 def turnstile_ok(token):
     secret = setting("turnstile_secret")
-    if not secret: return True
+    sitekey = setting("turnstile_sitekey")
+    # A secret without its public site key cannot produce a browser token; do not lock
+    # every user out because of an incomplete optional anti-bot configuration.
+    if not secret or not sitekey: return True
     if not token: return False
     try:
         result = requests.post("https://challenges.cloudflare.com/turnstile/v0/siteverify", data={"secret": secret, "response": token, "remoteip": request.remote_addr}, timeout=8).json()
@@ -315,7 +318,9 @@ def login():
         session.clear()
         if user.totp_enabled and user.totp_secret:
             session["pending_2fa_user_id"] = user.id; session["pending_2fa_email"] = user.email; audit("login_2fa_challenge", "Password accepted; TOTP required"); return redirect(url_for("two_factor_challenge"))
-        session["user_id"], session["user_email"] = user.id, user.email; audit("login", "Successful login"); return redirect(url_for("dashboard"))
+        session["user_id"], session["user_email"] = user.id, user.email
+        if setting("turnstile_secret") and not setting("turnstile_sitekey"): flash("Turnstile is disabled because its public site key is missing. Configure both Turnstile keys in Settings.", "error")
+        audit("login", "Successful login"); return redirect(url_for("dashboard"))
     return render_template("login.html", turnstile_sitekey=setting("turnstile_sitekey"))
 @app.post("/logout")
 def logout(): audit("logout"); session.clear(); return redirect(url_for("login"))
