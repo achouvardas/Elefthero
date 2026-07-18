@@ -1,13 +1,19 @@
 import os
 import uuid
+import base64
 from datetime import date, datetime
 from decimal import Decimal
 from xml.etree.ElementTree import Element, SubElement, fromstring, tostring
 
 import requests
+from cryptography.fernet import Fernet
 from dotenv import load_dotenv
-from flask import Flask, flash, jsonify, redirect, render_template, request, session, url_for
+from flask import Flask, abort, flash, jsonify, redirect, render_template, request, session, url_for, send_file
 from flask_sqlalchemy import SQLAlchemy
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.colors import HexColor
+from reportlab.pdfgen.canvas import Canvas
+from werkzeug.security import check_password_hash, generate_password_hash
 
 load_dotenv()
 app = Flask(__name__)
@@ -57,10 +63,64 @@ class Client(db.Model):
     address = db.Column(db.String(300))
     vies_checked_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
 
+class User(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    password_hash = db.Column(db.String(255), nullable=False)
+    role = db.Column(db.String(20), nullable=False, default="user")
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
+class AppSetting(db.Model):
+    key = db.Column(db.String(100), primary_key=True)
+    value = db.Column(db.Text, nullable=False)
+    encrypted = db.Column(db.Boolean, nullable=False, default=False)
+
+class ActivityLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    action = db.Column(db.String(80), nullable=False)
+    detail = db.Column(db.Text, nullable=False, default="")
+    payload = db.Column(db.Text)
+    actor = db.Column(db.String(255))
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
 def locale(): return session.get("locale", "en")
 @app.context_processor
-def inject_ui(): return {"t": COPY[locale()], "locale": locale(), "mode": current_mode()}
+def inject_ui(): return {"t": COPY[locale()], "locale": locale(), "mode": setting("mydata_mode", current_mode()) if User.query.first() else current_mode(), "current_user": current_user()}
 def current_mode(): return os.getenv("MYDATA_MODE", "demo").lower()
+def cipher():
+    key_path = os.path.join(app.instance_path, "myaade-master.key")
+    os.makedirs(app.instance_path, exist_ok=True)
+    if not os.path.exists(key_path):
+        with open(key_path, "wb") as handle: handle.write(Fernet.generate_key())
+        os.chmod(key_path, 0o600)
+    with open(key_path, "rb") as handle: return Fernet(handle.read())
+def setting(key, default=""):
+    item = db.session.get(AppSetting, key)
+    if not item: return default
+    return cipher().decrypt(item.value.encode()).decode() if item.encrypted else item.value
+def set_setting(key, value, encrypted=False):
+    item = db.session.get(AppSetting, key) or AppSetting(key=key, value="")
+    item.encrypted, item.value = encrypted, (cipher().encrypt(value.encode()).decode() if encrypted and value else value)
+    db.session.add(item)
+def audit(action, detail="", payload=None):
+    db.session.add(ActivityLog(action=action, detail=detail, payload=payload, actor=session.get("user_email"))); db.session.commit()
+def current_user(): return db.session.get(User, session.get("user_id")) if session.get("user_id") else None
+def require_admin():
+    if not current_user() or current_user().role != "admin": abort(403)
+def turnstile_ok(token):
+    secret = setting("turnstile_secret")
+    if not secret: return True
+    if not token: return False
+    try:
+        result = requests.post("https://challenges.cloudflare.com/turnstile/v0/siteverify", data={"secret": secret, "response": token, "remoteip": request.remote_addr}, timeout=8).json()
+        return result.get("success", False)
+    except requests.RequestException: return False
+
+@app.before_request
+def protect_app():
+    public = {"setup", "login", "health", "static"}
+    if not User.query.first() and request.endpoint not in public: return redirect(url_for("setup"))
+    if User.query.first() and not current_user() and request.endpoint not in public: return redirect(url_for("login"))
 
 def invoice_xml(invoice):
     root = Element("InvoicesDoc")
@@ -80,13 +140,17 @@ def invoice_xml(invoice):
     return tostring(root, encoding="utf-8", xml_declaration=True)
 
 def transmit(invoice):
-    mode = current_mode()
-    if mode == "demo": return "DEMO-" + uuid.uuid4().hex[:10].upper()
+    mode = setting("mydata_mode", current_mode())
+    xml = invoice_xml(invoice)
+    if mode == "demo":
+        mark = "DEMO-" + uuid.uuid4().hex[:10].upper(); audit("xml_sent", f"Demo SendInvoices for {invoice.number}", xml.decode()); audit("xml_received", f"Demo response for {invoice.number}", f"<response><mark>{mark}</mark></response>"); return mark
     config = ENVIRONMENTS.get(mode)
-    user, key = os.getenv("MYDATA_USER_ID"), os.getenv("MYDATA_SUBSCRIPTION_KEY")
+    user, key = setting("mydata_user_id"), setting("mydata_subscription_key")
     if not config or not user or not key: raise ValueError("AADE credentials are missing. Add them only to your local environment.")
-    response = requests.post(config["url"] + "/SendInvoices", data=invoice_xml(invoice), headers={"aade-user-id": user, "ocp-apim-subscription-key": key, "Content-Type": "application/xml"}, timeout=20)
+    audit("xml_sent", f"SendInvoices for {invoice.number}", xml.decode())
+    response = requests.post(config["url"] + "/SendInvoices", data=xml, headers={"aade-user-id": setting("mydata_user_id"), "ocp-apim-subscription-key": setting("mydata_subscription_key"), "Content-Type": "application/xml"}, timeout=20)
     response.raise_for_status()
+    audit("xml_received", f"AADE response for {invoice.number}", response.text)
     return "AADE-" + uuid.uuid4().hex[:10].upper() # Response parsing is deliberately surfaced in Activity until AADE schema validation.
 
 @app.get("/")
@@ -95,14 +159,64 @@ def dashboard():
     total = sum((i.total for i in invoices if i.status == "transmitted"), Decimal("0"))
     return render_template("dashboard.html", invoices=invoices[:5], total=total, drafts=sum(i.status == "draft" for i in invoices))
 
+@app.route("/setup", methods=["GET", "POST"])
+def setup():
+    if User.query.first(): return redirect(url_for("login"))
+    if request.method == "POST":
+        email, password = request.form["email"].strip().lower(), request.form["password"]
+        if len(password) < 12: flash("Use an administrator password of at least 12 characters.", "error"); return redirect(url_for("setup"))
+        db.session.add(User(email=email, password_hash=generate_password_hash(password), role="admin"))
+        for key, secret in [("mydata_mode", False), ("mydata_user_id", True), ("mydata_subscription_key", True), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False)]: set_setting(key, request.form.get(key, "demo" if key == "mydata_mode" else ""), secret)
+        db.session.commit(); session["user_id"], session["user_email"] = User.query.filter_by(email=email).one().id, email; audit("setup_complete", "First administrator and encrypted settings created"); return redirect(url_for("dashboard"))
+    return render_template("setup.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if not User.query.first(): return redirect(url_for("setup"))
+    if request.method == "POST":
+        user = User.query.filter_by(email=request.form["email"].strip().lower()).first()
+        if not turnstile_ok(request.form.get("cf-turnstile-response")) or not user or not check_password_hash(user.password_hash, request.form["password"]): flash("Invalid credentials or Turnstile verification.", "error"); audit("login_failed", request.form["email"]); return redirect(url_for("login"))
+        session.clear(); session["user_id"], session["user_email"] = user.id, user.email; audit("login", "Successful login"); return redirect(url_for("dashboard"))
+    return render_template("login.html", turnstile_sitekey=setting("turnstile_sitekey"))
+@app.post("/logout")
+def logout(): audit("logout"); session.clear(); return redirect(url_for("login"))
+
+@app.route("/settings", methods=["GET", "POST"])
+def settings():
+    require_admin()
+    if request.method == "POST":
+        for key, secret in [("mydata_mode", False), ("mydata_user_id", True), ("mydata_subscription_key", True), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False)]:
+            value = request.form.get(key, "")
+            if value or not secret: set_setting(key, value, secret)
+        db.session.commit(); audit("settings_updated", "Administrator updated integration and numbering settings"); flash("Settings saved. Secrets are encrypted at rest.", "success"); return redirect(url_for("settings"))
+    values = {key: setting(key) for key in ["mydata_mode", "turnstile_sitekey", "invoice_series", "invoice_next_number"]}
+    return render_template("settings.html", values=values, configured={"mydata_user_id": bool(setting("mydata_user_id")), "mydata_subscription_key": bool(setting("mydata_subscription_key")), "turnstile_secret": bool(setting("turnstile_secret"))})
+@app.route("/users", methods=["GET", "POST"])
+def users():
+    require_admin()
+    if request.method == "POST":
+        email, password = request.form["email"].strip().lower(), request.form["password"]
+        if User.query.filter_by(email=email).first() or len(password) < 12: flash("Email already exists or password is under 12 characters.", "error")
+        else: db.session.add(User(email=email, password_hash=generate_password_hash(password), role=request.form.get("role", "user"))); db.session.commit(); audit("user_created", email); flash("User created.", "success")
+        return redirect(url_for("users"))
+    return render_template("users.html", users=User.query.order_by(User.created_at).all())
+@app.get("/logs")
+def logs(): require_admin(); return render_template("logs.html", logs=ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(100).all())
+@app.get("/invoices/<int:invoice_id>/pdf")
+def invoice_pdf(invoice_id):
+    invoice = db.get_or_404(Invoice, invoice_id); path = os.path.join(app.instance_path, f"invoice-{invoice.id}.pdf")
+    canvas = Canvas(path, pagesize=A4); canvas.setFillColor(HexColor("#0f172a")); canvas.rect(0, 0, 595, 842, fill=1, stroke=0); canvas.setFillColor(HexColor("#67e8f9")); canvas.setFont("Helvetica-Bold", 26); canvas.drawString(48, 785, "myAade"); canvas.setFillColor(HexColor("#ffffff")); canvas.setFont("Helvetica-Bold", 20); canvas.drawString(48, 730, f"Invoice {invoice.number}"); canvas.setFont("Helvetica", 12); canvas.drawString(48, 695, f"Customer: {invoice.customer}  |  VAT: {invoice.vat_number}"); canvas.drawString(48, 670, f"Date: {invoice.issue_date.isoformat()}  |  AADE type: {invoice.invoice_type}"); canvas.drawString(48, 620, invoice.description); canvas.setFont("Helvetica-Bold", 16); canvas.drawRightString(545, 110, f"TOTAL  EUR {invoice.total:.2f}"); canvas.save(); audit("pdf_generated", f"Invoice {invoice.number}"); return send_file(path, as_attachment=True, download_name=f"invoice-{invoice.number}.pdf")
+
 @app.route("/invoices/new", methods=["GET", "POST"])
 def new_invoice():
     if request.method == "POST":
         invoice_type = request.form["invoice_type"]
         if invoice_type not in INVOICE_TYPES: flash("Invalid AADE invoice type.", "error"); return redirect(url_for("new_invoice"))
         invoice = Invoice(number=request.form["number"], invoice_type=invoice_type, customer=request.form["customer"], vat_number=request.form["vat_number"], description=request.form["description"], net=Decimal(request.form["net"]), vat_rate=Decimal(request.form["vat_rate"]), issue_date=date.fromisoformat(request.form["issue_date"]))
-        db.session.add(invoice); db.session.commit(); flash("Invoice saved as draft.", "success"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
-    return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=INVOICE_TYPES)
+        db.session.add(invoice)
+        if request.form["number"].isdigit(): set_setting("invoice_next_number", str(int(request.form["number"]) + 1))
+        db.session.commit(); audit("invoice_draft", f"Created {invoice.number}"); flash("Invoice saved as draft.", "success"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
+    return render_template("invoice_form.html", today=date.today().isoformat(), clients=Client.query.order_by(Client.name).all(), invoice_types=INVOICE_TYPES, next_number=setting("invoice_next_number", "1"), series=setting("invoice_series", "A"))
 
 @app.get("/invoices/<int:invoice_id>")
 def invoice_detail(invoice_id): return render_template("invoice_detail.html", invoice=db.get_or_404(Invoice, invoice_id))

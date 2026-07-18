@@ -7,6 +7,7 @@ instance/
 !.env.example
 *.sqlite3
 *.db
+*.key
 .pytest_cache/
 .cloudflared/
 cloudflared/config.yml

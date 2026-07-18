@@ -30,6 +30,14 @@ python app.py
 
 Open `http://127.0.0.1:5000`. The default `MYDATA_MODE=demo` never calls AADE; it generates a clearly labelled `DEMO-*` MARK.
 
+For an automated local dependency/setup preparation, run `bash scripts/setup.sh`, configure the Cloudflare tunnel as below, start the system services, then open the site. The first visit presents a one-time administrator setup wizard.
+
+## Secure first-run setup
+
+The first administrator completes an on-screen setup wizard. It creates the admin account, selects Demo / AADE Test / Production mode, configures invoice series and first number, and optionally accepts AADE and Cloudflare Turnstile credentials. Secrets are encrypted before being stored in SQLite using a server-local Fernet key in `instance/`; that key, the database, and `.env` are excluded from Git. Back up the database and its matching key together.
+
+After setup, administrators can manage users, integrations, numbering, activity/XML logs, and PDF invoice downloads. Turnstile uses Cloudflare Siteverify on the server; configure both the site key and secret key in Settings before it is enforced.
+
 ## AADE configuration
 
 The AADE specification requires `aade-user-id` and `ocp-apim-subscription-key` in every call. Put credentials only in your local `.env` or deployment secret manager — `.env` and databases are intentionally ignored by Git.
