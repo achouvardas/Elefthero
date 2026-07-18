@@ -19,7 +19,7 @@ from reportlab.graphics import renderPDF
 from reportlab.graphics.shapes import Drawing
 from werkzeug.security import check_password_hash, generate_password_hash
 from werkzeug.utils import secure_filename
-from sqlalchemy import inspect, text
+from sqlalchemy import func, inspect, text
 
 load_dotenv()
 app = Flask(__name__)
@@ -430,7 +430,33 @@ def clients():
             db.session.commit(); flash(f"{name} verified with VIES and saved.", "success")
         except (ValueError, requests.RequestException) as error: audit("vies_failed", str(error)); flash(f"VIES validation unavailable: {error}", "error")
         return redirect(url_for("clients"))
-    return render_template("clients.html", clients=Client.query.order_by(Client.name).all())
+    saved_clients = Client.query.order_by(Client.name).all()
+    invoice_counts = {}
+    for vat_number, count in db.session.query(Invoice.vat_number, func.count(Invoice.id)).group_by(Invoice.vat_number):
+        invoice_counts[vat_number] = count
+    return render_template("clients.html", clients=saved_clients, invoice_counts=invoice_counts)
+
+@app.get("/clients/<int:client_id>/invoices")
+def client_invoices(client_id):
+    client = db.get_or_404(Client, client_id)
+    start_raw, end_raw = request.args.get("start", ""), request.args.get("end", "")
+    try:
+        start_date = date.fromisoformat(start_raw) if start_raw else None
+        end_date = date.fromisoformat(end_raw) if end_raw else None
+    except ValueError:
+        flash("Use valid dates for the client invoice filter.", "error")
+        return redirect(url_for("client_invoices", client_id=client.id))
+    if start_date and end_date and start_date > end_date:
+        flash("The start date must be before the end date.", "error")
+        return redirect(url_for("client_invoices", client_id=client.id))
+    query = Invoice.query.filter_by(vat_number=client.vat_number)
+    if start_date: query = query.filter(Invoice.issue_date >= start_date)
+    if end_date: query = query.filter(Invoice.issue_date <= end_date)
+    client_invoice_rows = query.order_by(Invoice.issue_date.desc(), Invoice.created_at.desc()).all()
+    net_total = sum((invoice.net for invoice in client_invoice_rows), Decimal("0"))
+    vat_total = sum((invoice.vat_amount for invoice in client_invoice_rows), Decimal("0"))
+    gross_total = net_total + vat_total
+    return render_template("client_invoices.html", client=client, invoices=client_invoice_rows, start_date=start_raw, end_date=end_raw, net_total=net_total, vat_total=vat_total, gross_total=gross_total)
 @app.post("/clients/<int:client_id>/delete")
 def delete_client(client_id):
     client = db.get_or_404(Client, client_id); db.session.delete(client); db.session.commit(); audit("client_deleted", client.vat_number); flash("Client deleted.", "success"); return redirect(url_for("clients"))
