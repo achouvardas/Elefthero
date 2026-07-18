@@ -266,8 +266,15 @@ def transmit(invoice):
 @app.get("/")
 def dashboard():
     invoices = Invoice.query.order_by(Invoice.created_at.desc()).all()
-    total = sum((i.total for i in invoices if i.status == "transmitted"), Decimal("0"))
-    return render_template("dashboard.html", invoices=invoices[:5], total=total, drafts=sum(i.status == "draft" for i in invoices))
+    transmitted = [invoice for invoice in invoices if invoice.status == "transmitted"]
+    total = sum((invoice.total for invoice in transmitted), Decimal("0"))
+    vat_total = sum((invoice.vat_amount for invoice in transmitted), Decimal("0"))
+    customers = {}
+    for invoice in transmitted:
+        entry = customers.setdefault(invoice.vat_number, {"name": invoice.customer, "vat": invoice.vat_number, "total": Decimal("0"), "vat_total": Decimal("0"), "count": 0})
+        entry["total"] += invoice.total; entry["vat_total"] += invoice.vat_amount; entry["count"] += 1
+    top_customers = sorted(customers.values(), key=lambda customer: customer["total"], reverse=True)[:5]
+    return render_template("dashboard.html", invoices=invoices[:5], total=total, vat_total=vat_total, top_customers=top_customers, drafts=sum(i.status == "draft" for i in invoices))
 
 @app.route("/setup", methods=["GET", "POST"])
 def setup():
@@ -295,11 +302,11 @@ def logout(): audit("logout"); session.clear(); return redirect(url_for("login")
 def settings():
     require_admin()
     if request.method == "POST":
-        for key, secret in [("mydata_mode", False), ("mydata_test_user_id", True), ("mydata_test_subscription_key", True), ("mydata_production_user_id", True), ("mydata_production_subscription_key", True), ("resend_api_key", True), ("resend_sender", False), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False)]:
+        for key, secret in [("mydata_mode", False), ("mydata_test_user_id", True), ("mydata_test_subscription_key", True), ("mydata_production_user_id", True), ("mydata_production_subscription_key", True), ("resend_api_key", True), ("resend_sender_name", False), ("resend_sender_email", False), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False)]:
             value = request.form.get(key, "")
             if value or not secret: set_setting(key, value, secret)
         db.session.commit(); audit("settings_updated", "Administrator updated integration and numbering settings"); flash("Settings saved. Secrets are encrypted at rest.", "success"); return redirect(url_for("settings"))
-    values = {key: setting(key) for key in ["mydata_mode", "resend_sender", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat"]}
+    values = {key: setting(key) for key in ["mydata_mode", "resend_sender_name", "resend_sender_email", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat"]}
     configured = {key: bool(setting(key)) for key in ["mydata_test_user_id", "mydata_test_subscription_key", "mydata_production_user_id", "mydata_production_subscription_key", "resend_api_key", "turnstile_secret"]}
     configured["mydata_test_user_id"] |= bool(setting("mydata_user_id"))
     configured["mydata_test_subscription_key"] |= bool(setting("mydata_subscription_key"))
@@ -464,7 +471,8 @@ def email_invoice(invoice_id):
     recipient = request.form.get("recipient", "").strip()
     if invoice.status != "transmitted": flash("Only AADE-transmitted invoices can be emailed.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
     if not recipient or "@" not in recipient: flash("Enter a valid recipient email address.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
-    api_key, sender = setting("resend_api_key"), setting("resend_sender")
+    api_key = setting("resend_api_key"); sender_name, sender_email = setting("resend_sender_name"), setting("resend_sender_email")
+    sender = f"{sender_name} <{sender_email}>" if sender_name and sender_email else setting("resend_sender")
     if not api_key or not sender: flash("Configure the Resend API key and sender in Settings before emailing invoices.", "error"); return redirect(url_for("invoice_detail", invoice_id=invoice.id))
     invoice_pdf(invoice.id)
     pdf_path = os.path.join(app.instance_path, f"invoice-{invoice.id}.pdf")
@@ -483,6 +491,7 @@ def email_invoice(invoice_id):
 def invoices():
     query = Invoice.query
     term, status, invoice_type, vat = (request.args.get(key, "").strip() for key in ("q", "status", "invoice_type", "vat"))
+    if " — " in term: term = term.rsplit(" — ", 1)[-1].strip()
     if term: query = query.filter(or_(Invoice.number.ilike(f"%{term}%"), Invoice.customer.ilike(f"%{term}%"), Invoice.vat_number.ilike(f"%{term}%"), Invoice.mydata_mark.ilike(f"%{term}%")))
     if status in {"draft", "transmitted"}: query = query.filter_by(status=status)
     if invoice_type in INVOICE_TYPES: query = query.filter_by(invoice_type=invoice_type)
@@ -540,6 +549,7 @@ def clients():
         return redirect(url_for("clients"))
     term = request.args.get("q", "").strip()
     client_query = Client.query
+    if " — " in term: term = term.rsplit(" — ", 1)[-1].strip()
     if term: client_query = client_query.filter(or_(Client.name.ilike(f"%{term}%"), Client.vat_number.ilike(f"%{term}%"), Client.gemi_number.ilike(f"%{term}%")))
     page = max(request.args.get("page", 1, type=int), 1)
     pagination = client_query.order_by(Client.name).paginate(page=page, per_page=12, error_out=False)
