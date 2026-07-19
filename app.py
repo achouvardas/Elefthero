@@ -8,6 +8,7 @@ import subprocess
 import tempfile
 import textwrap
 import uuid
+from xml.dom import minidom
 from html import escape
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -225,6 +226,12 @@ def encrypt_secret(value): return cipher().encrypt(value.encode()).decode()
 def decrypt_secret(value): return cipher().decrypt(value.encode()).decode() if value else ""
 def audit(action, detail="", payload=None):
     db.session.add(ActivityLog(action=action, detail=detail, payload=payload, actor=session.get("user_email"))); db.session.commit()
+def readable_payload(payload):
+    if not payload: return ""
+    try:
+        if payload.lstrip().startswith("<"): return minidom.parseString(payload.encode()).toprettyxml(indent="  ")
+        return json.dumps(json.loads(payload), ensure_ascii=False, indent=2, sort_keys=True)
+    except (ValueError, TypeError): return payload
 def current_user(): return db.session.get(User, session.get("user_id")) if session.get("user_id") else None
 def login_limit_settings():
     def number(key, default, minimum, maximum):
@@ -279,6 +286,7 @@ def viva_retrieve_transaction(mode, transaction_id):
     response.raise_for_status(); return response.json()
 def viva_invoice_from_template(template, gross_amount):
     if template.invoice_type not in {"11.1", "11.2"}: raise ValueError("Viva POS automation requires a retail-receipt template (11.1 or 11.2).")
+    if template.payment_method != "7": raise ValueError("Viva POS automation requires a template whose payment method is POS / e-POS.")
     template_lines = InvoiceTemplateLine.query.filter_by(template_id=template.id).order_by(InvoiceTemplateLine.id).all()
     if not template_lines: raise ValueError("The selected Viva template has no invoice lines.")
     if len(template_lines) != 1: raise ValueError("Viva POS automation requires a template with exactly one line.")
@@ -484,7 +492,7 @@ def settings():
     configured["mydata_test_subscription_key"] |= bool(setting("mydata_subscription_key"))
     public_scheme = request.headers.get("X-Forwarded-Proto", "https").split(",")[0].strip()
     public_base = f"{public_scheme}://{request.host}"
-    viva_templates = [template for template in InvoiceTemplate.query.order_by(InvoiceTemplate.name).all() if InvoiceTemplateLine.query.filter_by(template_id=template.id).count() == 1]
+    viva_templates = [template for template in InvoiceTemplate.query.order_by(InvoiceTemplate.name).all() if template.payment_method == "7" and InvoiceTemplateLine.query.filter_by(template_id=template.id).count() == 1]
     return render_template("settings.html", values=values, configured=configured, viva_templates=viva_templates, viva_webhook_urls={mode: f"{public_base}{url_for('viva_webhook', mode=mode)}" for mode in ("test", "production")})
 @app.get("/settings/secrets/<key>")
 def reveal_setting_secret(key):
@@ -517,8 +525,9 @@ def viva_webhook(mode):
             return jsonify(Key=response.json()["Key"])
         except (KeyError, requests.RequestException, ValueError) as error:
             audit("viva_webhook_verification_failed", f"{mode}: {error}"); return jsonify(error="Webhook verification failed."), 503
-    if setting("viva_enabled") != "on": return jsonify(error="Viva POS automation is disabled."), 404
     payload = request.get_json(silent=True) or {}; event = payload.get("EventData") or {}; transaction_id = str(event.get("TransactionId") or "")
+    audit("viva_webhook_received", f"{mode}: transaction={transaction_id or '-'}", json.dumps(payload, ensure_ascii=False))
+    if setting("viva_enabled") != "on": return jsonify(error="Viva POS automation is disabled."), 404
     terminal_id, configured_terminal = str(event.get("TerminalId") or ""), setting(f"viva_{mode}_terminal_id")
     amount = Decimal(str(event.get("Amount") or "0"))
     if payload.get("EventTypeId") != 1796 or not transaction_id or event.get("StatusId") != "F" or amount <= 0 or not configured_terminal or terminal_id != configured_terminal or (merchant_id and str(event.get("MerchantId") or "") != merchant_id):
@@ -572,7 +581,10 @@ def delete_user(user_id):
     else: db.session.delete(user); db.session.commit(); audit("user_deleted", user.email); flash("User deleted.", "success")
     return redirect(url_for("users"))
 @app.get("/logs")
-def logs(): require_admin(); return render_template("logs.html", logs=ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(100).all())
+def logs():
+    require_admin(); entries = ActivityLog.query.order_by(ActivityLog.created_at.desc()).limit(100).all()
+    for entry in entries: entry.pretty_payload = readable_payload(entry.payload)
+    return render_template("logs.html", logs=entries)
 @app.get("/demo")
 def demo():
     require_admin(); return render_template("demo.html", presentation_url="https://achouvardas.github.io/Elefthero/presentation.html")
@@ -605,7 +617,7 @@ def export_demo_video():
 def view_xml_log(log_id):
     require_admin(); log = db.get_or_404(ActivityLog, log_id)
     if log.action not in {"xml_sent", "xml_received"}: abort(404)
-    return app.response_class(log.payload or "", mimetype="application/xml")
+    return app.response_class(readable_payload(log.payload), mimetype="application/xml")
 @app.get("/invoices/<int:invoice_id>/pdf")
 def invoice_pdf(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id); path = os.path.join(app.instance_path, f"invoice-{invoice.id}.pdf"); lines = InvoiceLine.query.filter_by(invoice_id=invoice.id).all(); pdf_lines = lines or [type("L", (), {"description": invoice.description, "net": invoice.net, "quantity": Decimal("1"), "unit_price": invoice.net, "vat_rate": invoice.vat_rate})()]; font_path = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"; pdfmetrics.registerFont(TTFont("SiraSans", font_path))
@@ -649,9 +661,18 @@ def invoice_pdf(invoice_id):
     if invoice.invoice_type == "5.1" and invoice.correlated_mark:
         pdf_notes = f"{pdf_notes} - " if pdf_notes else ""
         pdf_notes += f"Συσχετισμένο ΜΑΡΚ: {invoice.correlated_mark}"
+    viva_payment = VivaPayment.query.filter_by(invoice_id=invoice.id).first()
+    if viva_payment:
+        try:
+            viva_event = json.loads(viva_payment.payload or "{}").get("EventData", {})
+            viva_lines = ["Πληρωμή με Viva.com", f"Transaction ID: {viva_event.get('TransactionId', viva_payment.transaction_id)}", f"TID: {viva_event.get('TerminalId', viva_payment.terminal_id)}", f"Order Code: {viva_event.get('OrderCode', '-')}", f"Card Number: {viva_event.get('CardNumber', '-')}", f"Authorization ID: {viva_event.get('AuthorizationId', '-')}", f"RRN: {viva_event.get('RetrievalReferenceNumber', '-')}"]
+            pdf_notes = (pdf_notes + "\n" if pdf_notes else "") + "\n".join(viva_lines)
+        except (TypeError, ValueError): pass
     if pdf_notes:
         canvas.setFont("SiraSans", 8); canvas.setFillColor(slate); canvas.drawString(155, 150, "Παρατηρήσεις:")
-        for index, note_line in enumerate([pdf_notes[i:i+65] for i in range(0, len(pdf_notes), 65)][:3]): canvas.drawString(155, 136 - index * 11, note_line)
+        note_lines = []
+        for note in pdf_notes.splitlines() or [pdf_notes]: note_lines.extend(textwrap.wrap(note, width=65) or [""])
+        for index, note_line in enumerate(note_lines[:7]): canvas.drawString(155, 136 - index * 11, note_line)
     if invoice.qr_url:
         widget = qr.QrCodeWidget(invoice.qr_url); left, bottom, right, top = widget.getBounds(); size = 94; drawing = Drawing(size, size); drawing.add(widget); drawing.transform = [size / (right-left), 0, 0, size / (top-bottom), 0, 0]; renderPDF.draw(drawing, canvas, 42, 85); canvas.linkURL(invoice.qr_url, (42, 85, 136, 179), relative=0)
     canvas.setFillColor(slate); canvas.setFont("SiraSans", 8); canvas.drawString(42, 55, "Το παρόν διαβιβάστηκε επιτυχώς στο myDATA της ΑΑΔΕ." if invoice.mydata_mark else "Πρόχειρο — δεν έχει ακόμη διαβιβαστεί στο myDATA."); canvas.save(); audit("pdf_generated", f"Invoice {invoice.number}"); return send_file(path, as_attachment=False, download_name=f"invoice-{invoice.number}.pdf", mimetype="application/pdf")

@@ -38,6 +38,7 @@
 - Each enabled `Transaction Payment Created` webhook is checked for its event type, successful status, configured merchant, configured terminal, currency amount, and duplicate transaction ID. Elefthero then retrieves the transaction from Viva with OAuth before accepting it.
 - Viva POS supports templates with exactly one line. The selected line's VAT rate is applied to Viva's VAT-inclusive payment amount, and Elefthero calculates the corresponding net amount and VAT before creating the invoice.
 - The safe default is a reviewable invoice draft. Automatic AADE submission is a separate, explicit setting and should only be enabled after Viva Demo validation.
+- Every incoming Viva webhook payload is retained in the developer log, including rejected deliveries. The resulting PDF notes show Viva transaction ID, TID, order code, masked card number, authorization ID, and RRN.
 
 ## Security, access, and accessibility
 
@@ -47,7 +48,7 @@
 - Optional Cloudflare Turnstile, enabled only when both site key and secret are configured.
 - Optional authenticator-app TOTP 2FA: QR enrollment, one-time-code challenge at login, encrypted secret storage, and password + current code required for disablement.
 - AADE credentials, Resend key, Turnstile secret, and TOTP seeds are encrypted at rest using a local Fernet key.
-- Developer log records XML, sign-in events, client lookups, PDF generation, cancellation, email, template actions, and sensitive-setting reveals.
+- Developer log records XML, Viva webhook payloads, sign-in events, client lookups, PDF generation, cancellation, email, template actions, and sensitive-setting reveals. JSON and XML are formatted for browser inspection.
 - Accessibility pop-up provides text scaling, high contrast, readable spacing, underlined links, reduced motion, visible focus outlines, and browser-local preferences. It is WCAG 2.1-oriented and does not claim full conformance.
 
 ## Devpost demonstration mode
