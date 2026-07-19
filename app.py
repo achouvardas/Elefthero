@@ -2,6 +2,7 @@ import os
 import base64
 import io
 import hmac
+import json
 import secrets
 import subprocess
 import tempfile
@@ -146,6 +147,16 @@ class InvoiceTemplateLine(db.Model):
     income_category = db.Column(db.String(30))
     income_type = db.Column(db.String(30))
 
+class VivaPayment(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    transaction_id = db.Column(db.String(80), unique=True, nullable=False, index=True)
+    terminal_id = db.Column(db.String(80), nullable=False)
+    amount = db.Column(db.Numeric(12, 2), nullable=False)
+    mode = db.Column(db.String(12), nullable=False)
+    invoice_id = db.Column(db.Integer, db.ForeignKey("invoice.id"))
+    payload = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, nullable=False, default=datetime.utcnow)
+
 class Client(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     name = db.Column(db.String(160), nullable=False)
@@ -254,14 +265,45 @@ def turnstile_ok(token):
         return result.get("success", False)
     except requests.RequestException: return False
 
+def viva_urls(mode):
+    return ("https://demo-api.vivapayments.com", "https://demo.vivapayments.com", "https://demo-accounts.vivapayments.com") if mode == "test" else ("https://api.vivapayments.com", "https://www.vivapayments.com", "https://accounts.vivapayments.com")
+def viva_token(mode):
+    client_id, client_secret = setting(f"viva_{mode}_client_id"), setting(f"viva_{mode}_client_secret")
+    if not client_id or not client_secret: raise ValueError(f"Viva {mode} OAuth client ID and secret are required.")
+    token_url = viva_urls(mode)[2] + "/connect/token"
+    response = requests.post(token_url, data={"grant_type": "client_credentials", "scope": "urn:viva:payments:core:api:redirectcheckout"}, auth=(client_id, client_secret), timeout=15)
+    response.raise_for_status(); return response.json()["access_token"]
+def viva_retrieve_transaction(mode, transaction_id):
+    response = requests.get(viva_urls(mode)[0] + f"/checkout/v2/transactions/{transaction_id}", headers={"Authorization": f"Bearer {viva_token(mode)}"}, timeout=15)
+    response.raise_for_status(); return response.json()
+def viva_invoice_from_template(template, gross_amount):
+    if template.invoice_type not in {"11.1", "11.2"}: raise ValueError("Viva POS automation requires a retail-receipt template (11.1 or 11.2).")
+    template_lines = InvoiceTemplateLine.query.filter_by(template_id=template.id).order_by(InvoiceTemplateLine.id).all()
+    if not template_lines: raise ValueError("The selected Viva template has no invoice lines.")
+    source_gross = sum((Decimal(line.quantity) * Decimal(line.unit_price) * (Decimal("1") + Decimal(line.vat_rate) / 100) for line in template_lines), Decimal("0"))
+    if source_gross <= 0: raise ValueError("The selected Viva template must have a positive total.")
+    scale = gross_amount / source_gross; calculated = []
+    for line in template_lines:
+        net = (Decimal(line.quantity) * Decimal(line.unit_price) * scale).quantize(Decimal(".01"))
+        calculated.append((line, net))
+    target_net = sum((gross_amount / (Decimal("1") + Decimal(line.vat_rate) / 100) * ((Decimal(line.quantity) * Decimal(line.unit_price) * (Decimal("1") + Decimal(line.vat_rate) / 100)) / source_gross) for line in template_lines), Decimal("0")).quantize(Decimal(".01"))
+    calculated[-1] = (calculated[-1][0], calculated[-1][1] + target_net - sum((net for _, net in calculated), Decimal("0")))
+    number = setting("invoice_next_number", "1")
+    retail = template.invoice_type in {"11.1", "11.2", "11.4"}
+    invoice = Invoice(number=number, invoice_type=template.invoice_type, customer="ΠΕΛΑΤΗΣ ΛΙΑΝΙΚΗΣ" if retail else "Viva POS customer", vat_number="000000000" if retail else "", description=template_lines[0].description, net=sum((net for _, net in calculated), Decimal("0")), vat_rate=Decimal(template_lines[0].vat_rate), issue_date=date.today(), payment_method="7", notes="Δημιουργήθηκε από επιβεβαιωμένη πληρωμή Viva POS.")
+    db.session.add(invoice); db.session.flush()
+    for line, net in calculated: db.session.add(InvoiceLine(invoice_id=invoice.id, description=line.description, quantity=1, unit_price=net, net=net, vat_rate=line.vat_rate, vat_exemption_reason=line.vat_exemption_reason, income_category=line.income_category, income_type=line.income_type))
+    if number.isdigit(): set_setting("invoice_next_number", str(int(number) + 1))
+    return invoice
+
 @app.before_request
 def protect_app():
-    public = {"setup", "login", "two_factor_challenge", "health", "static"}
+    public = {"setup", "login", "two_factor_challenge", "health", "static", "viva_webhook"}
     if not User.query.first() and request.endpoint not in public: return redirect(url_for("setup"))
     if User.query.first() and not current_user() and request.endpoint not in public: return redirect(url_for("login"))
 @app.before_request
 def csrf_protect():
-    if request.method != "POST": return
+    if request.method != "POST" or request.endpoint == "viva_webhook": return
     expected, provided = session.get("csrf_token", ""), request.form.get("csrf_token") or request.headers.get("X-CSRF-Token", "")
     if not expected or not provided or not hmac.compare_digest(expected, provided): abort(400, "Invalid or missing CSRF token.")
 
@@ -428,25 +470,66 @@ def two_factor_disable():
 def settings():
     require_admin()
     if request.method == "POST":
-        for key, secret in [("mydata_mode", False), ("mydata_test_user_id", True), ("mydata_test_subscription_key", True), ("mydata_production_user_id", True), ("mydata_production_subscription_key", True), ("resend_api_key", True), ("resend_sender_name", False), ("resend_sender_email", False), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False), ("login_rate_limit_attempts", False), ("login_rate_limit_window_minutes", False), ("login_rate_limit_lockout_minutes", False)]:
+        for key, secret in [("mydata_mode", False), ("mydata_test_user_id", True), ("mydata_test_subscription_key", True), ("mydata_production_user_id", True), ("mydata_production_subscription_key", True), ("resend_api_key", True), ("resend_sender_name", False), ("resend_sender_email", False), ("turnstile_sitekey", False), ("turnstile_secret", True), ("invoice_series", False), ("invoice_next_number", False), ("business_vat", False), ("login_rate_limit_attempts", False), ("login_rate_limit_window_minutes", False), ("login_rate_limit_lockout_minutes", False), ("viva_enabled", False), ("viva_auto_submit", False), ("viva_template_id", False), ("viva_test_terminal_id", False), ("viva_production_terminal_id", False), ("viva_test_merchant_id", True), ("viva_test_api_key", True), ("viva_test_client_id", True), ("viva_test_client_secret", True), ("viva_production_merchant_id", True), ("viva_production_api_key", True), ("viva_production_client_id", True), ("viva_production_client_secret", True)]:
             value = request.form.get(key, "")
             if value or not secret: set_setting(key, value, secret)
         db.session.commit(); audit("settings_updated", "Administrator updated integration and numbering settings"); flash("Settings saved. Secrets are encrypted at rest.", "success"); return redirect(url_for("settings"))
-    values = {key: setting(key) for key in ["mydata_mode", "resend_sender_name", "resend_sender_email", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat", "login_rate_limit_attempts", "login_rate_limit_window_minutes", "login_rate_limit_lockout_minutes"]}
-    configured = {key: bool(setting(key)) for key in ["mydata_test_user_id", "mydata_test_subscription_key", "mydata_production_user_id", "mydata_production_subscription_key", "resend_api_key", "turnstile_secret"]}
+    values = {key: setting(key) for key in ["mydata_mode", "resend_sender_name", "resend_sender_email", "turnstile_sitekey", "invoice_series", "invoice_next_number", "business_vat", "login_rate_limit_attempts", "login_rate_limit_window_minutes", "login_rate_limit_lockout_minutes", "viva_enabled", "viva_auto_submit", "viva_template_id", "viva_test_terminal_id", "viva_production_terminal_id"]}
+    configured = {key: bool(setting(key)) for key in ["mydata_test_user_id", "mydata_test_subscription_key", "mydata_production_user_id", "mydata_production_subscription_key", "resend_api_key", "turnstile_secret", "viva_test_merchant_id", "viva_test_api_key", "viva_test_client_id", "viva_test_client_secret", "viva_production_merchant_id", "viva_production_api_key", "viva_production_client_id", "viva_production_client_secret"]}
     configured["mydata_test_user_id"] |= bool(setting("mydata_user_id"))
     configured["mydata_test_subscription_key"] |= bool(setting("mydata_subscription_key"))
-    return render_template("settings.html", values=values, configured=configured)
+    return render_template("settings.html", values=values, configured=configured, viva_templates=InvoiceTemplate.query.order_by(InvoiceTemplate.name).all(), viva_webhook_urls={mode: url_for("viva_webhook", mode=mode, _external=True) for mode in ("test", "production")})
 @app.get("/settings/secrets/<key>")
 def reveal_setting_secret(key):
     require_admin()
-    allowed = {"mydata_test_user_id", "mydata_test_subscription_key", "mydata_production_user_id", "mydata_production_subscription_key", "resend_api_key", "turnstile_secret"}
+    allowed = {"mydata_test_user_id", "mydata_test_subscription_key", "mydata_production_user_id", "mydata_production_subscription_key", "resend_api_key", "turnstile_secret", "viva_test_merchant_id", "viva_test_api_key", "viva_test_client_id", "viva_test_client_secret", "viva_production_merchant_id", "viva_production_api_key", "viva_production_client_id", "viva_production_client_secret"}
     if key not in allowed: abort(404)
     value = setting(key)
     if not value and key.startswith("mydata_test_"):
         value = setting("mydata_user_id" if key.endswith("user_id") else "mydata_subscription_key")
     audit("secret_revealed", f"Administrator revealed {key}")
     return jsonify(value=value)
+@app.get("/settings/viva/devices")
+def viva_devices():
+    require_admin(); mode = request.args.get("mode", "test")
+    if mode not in {"test", "production"}: abort(400)
+    try:
+        response = requests.post(viva_urls(mode)[0] + "/ecr/v1/devices:search", json={"page": 1, "pageSize": 100}, headers={"Authorization": f"Bearer {viva_token(mode)}", "Content-Type": "application/json"}, timeout=15)
+        response.raise_for_status(); body = response.json(); devices = body.get("devices", body.get("items", body.get("data", [])))
+        return jsonify(devices=devices)
+    except (KeyError, requests.RequestException, ValueError) as error:
+        audit("viva_devices_failed", f"{mode}: {error}"); return jsonify(error="Viva could not load terminals. Check the POS OAuth credentials and permissions."), 502
+@app.route("/integrations/viva/webhook/<mode>", methods=["GET", "POST"])
+def viva_webhook(mode):
+    if mode not in {"test", "production"}: abort(404)
+    merchant_id, api_key = setting(f"viva_{mode}_merchant_id"), setting(f"viva_{mode}_api_key")
+    if request.method == "GET":
+        if not merchant_id or not api_key: return jsonify(error="Viva credentials are not configured."), 503
+        try:
+            response = requests.get(viva_urls(mode)[1] + "/api/messages/config/token", auth=(merchant_id, api_key), timeout=15); response.raise_for_status()
+            return jsonify(Key=response.json()["Key"])
+        except (KeyError, requests.RequestException, ValueError) as error:
+            audit("viva_webhook_verification_failed", f"{mode}: {error}"); return jsonify(error="Webhook verification failed."), 503
+    if setting("viva_enabled") != "on": return jsonify(error="Viva POS automation is disabled."), 404
+    payload = request.get_json(silent=True) or {}; event = payload.get("EventData") or {}; transaction_id = str(event.get("TransactionId") or "")
+    terminal_id, configured_terminal = str(event.get("TerminalId") or ""), setting(f"viva_{mode}_terminal_id")
+    amount = Decimal(str(event.get("Amount") or "0"))
+    if payload.get("EventTypeId") != 1796 or not transaction_id or event.get("StatusId") != "F" or amount <= 0 or not configured_terminal or terminal_id != configured_terminal or (merchant_id and str(event.get("MerchantId") or "") != merchant_id):
+        audit("viva_webhook_rejected", f"{mode}: transaction={transaction_id or '-'}, terminal={terminal_id or '-'}", json.dumps(payload)); return jsonify(error="Rejected"), 400
+    if VivaPayment.query.filter_by(transaction_id=transaction_id).first(): return jsonify(status="duplicate"), 200
+    try:
+        verified = viva_retrieve_transaction(mode, transaction_id); verified_amount = Decimal(str(verified.get("amount", verified.get("Amount", "-1"))))
+        if str(verified.get("statusId", verified.get("StatusId", ""))) != "F" or verified_amount != amount or str(verified.get("transactionId", verified.get("TransactionId", transaction_id))) != transaction_id: raise ValueError("Viva transaction verification did not match the webhook.")
+        template = db.session.get(InvoiceTemplate, int(setting("viva_template_id", "0") or 0))
+        if not template: raise ValueError("Choose a Viva invoice template in Settings.")
+        invoice = viva_invoice_from_template(template, amount)
+        payment = VivaPayment(transaction_id=transaction_id, terminal_id=terminal_id, amount=amount, mode=mode, invoice_id=invoice.id, payload=json.dumps(payload)); db.session.add(payment); db.session.commit()
+        audit("viva_pos_invoice_created", f"{mode} POS {terminal_id}; transaction {transaction_id}; invoice {invoice.number}")
+        if setting("viva_auto_submit") == "on":
+            result = transmit(invoice); invoice.status, invoice.mydata_mark, invoice.invoice_uid, invoice.qr_url = "transmitted", result["mark"], result["uid"], result["qr_url"]; db.session.commit(); audit("viva_pos_invoice_transmitted", f"Invoice {invoice.number} from Viva POS {transaction_id}")
+        return jsonify(status="accepted", invoice_id=invoice.id), 200
+    except (ValueError, requests.RequestException, KeyError) as error:
+        db.session.rollback(); audit("viva_webhook_failed", f"{mode} {transaction_id}: {error}", json.dumps(payload)); return jsonify(error="Processing failed"), 500
 @app.route("/business-settings", methods=["GET", "POST"])
 def business_settings():
     require_admin(); fields = ("business_legal_name", "business_activity", "business_vat", "business_doy", "business_address", "business_email", "business_phone", "business_gemi", "business_website")

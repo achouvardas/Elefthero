@@ -71,6 +71,21 @@ flowchart LR
   GEMI --> Log
 ```
 
+## Viva POS webhook service
+
+```mermaid
+flowchart LR
+  POS[Viva POS terminal] --> Hook[Transaction Payment Created webhook]
+  Hook --> Gate{Enabled, merchant and selected TID match?}
+  Gate -->|No| Reject[Reject and audit]
+  Gate -->|Yes| Verify[Retrieve transaction from Viva OAuth API]
+  Verify --> Template[Scale selected template from VAT-inclusive total]
+  Template --> Draft[Create invoice draft]
+  Draft -->|Explicit setting only| AADE[Submit to AADE]
+```
+
+Viva first verifies the public webhook URL by HTTP GET. POST handling is idempotent by Viva transaction ID, retains the received payload in the local payment record, and records acceptance/rejection in the developer log.
+
 ## Demonstration export service
 
 ```mermaid

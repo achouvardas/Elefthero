@@ -36,6 +36,7 @@ Elefthero is intentionally focused, but complete enough for day-to-day small-bus
 - Inline PDF invoices with business logo/details, customer information, line VAT, AADE identifiers, and manual Resend delivery after transmission.
 - Saved clients with VIES validation, optional ΓΕΜΗ enrichment, reusable addresses, filters, pagination, and invoice-by-type statistics.
 - Templates, editable “reuse as new draft”, dashboard totals, top customers, and client analytics.
+- Optional Viva POS webhook automation: terminal-restricted, Viva-verified VAT-inclusive payments create an invoice from a selected template, with draft-first review or explicit automatic AADE submission.
 - Secure setup, encrypted settings, user roles, server-enforced CSRF protection, configurable login rate limiting, optional Cloudflare Turnstile, optional authenticator-app 2FA, audit logs, and accessibility controls.
 - An administrator-only Devpost demonstration mode: one minute of landing-page story followed by a guided app tour, locally generated open-source narration, and presenter-assisted MP4 export.
 
