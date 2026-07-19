@@ -535,9 +535,9 @@ def invoice_pdf(invoice_id):
     customer_profession = invoice.customer_profession or (saved_client.profession if saved_client else "")
     canvas.setFillColor(HexColor("#ffffff")); canvas.rect(42, 545, 510, 85, fill=1, stroke=1); canvas.setFillColor(navy); canvas.setFont("SiraSans", 11); canvas.drawString(54, 606, invoice.customer); canvas.setFont("SiraSans", 9)
     if invoice.invoice_type not in {"11.1", "11.2"}:
-        canvas.drawString(54, 587, f"ΑΦΜ: {invoice.vat_number}")
-        if customer_address: canvas.drawString(54, 570, f"ΔΙΕΥΘΥΝΣΗ: {customer_address.replace(chr(10), ', ')[:78]}")
-        if customer_profession: canvas.drawString(54, 557, customer_profession[:90])
+        if customer_profession: canvas.drawString(54, 587, customer_profession[:90])
+        canvas.drawString(54, 570, f"ΑΦΜ: {invoice.vat_number}")
+        if customer_address: canvas.drawString(54, 557, f"ΔΙΕΥΘΥΝΣΗ: {customer_address.replace(chr(10), ', ')[:78]}")
     y = 510; canvas.setFillColor(navy); canvas.rect(42, y, 510, 26, fill=1, stroke=0); canvas.setFillColor(HexColor("#ffffff")); canvas.drawString(52, y+9, "Α/Α"); canvas.drawString(82, y+9, "ΠΕΡΙΓΡΑΦΗ"); canvas.drawRightString(300, y+9, "ΠΟΣ."); canvas.drawRightString(350, y+9, "ΤΙΜΗ"); canvas.drawRightString(405, y+9, "ΚΑΘ."); canvas.drawRightString(445, y+9, "ΦΠΑ%"); canvas.drawRightString(490, y+9, "ΦΠΑ €"); canvas.drawRightString(540, y+9, "ΣΥΝΟΛΟ")
     line_net_total, line_vat_total = Decimal("0"), Decimal("0")
     for index, line in enumerate(pdf_lines, 1):
@@ -596,6 +596,9 @@ def new_invoice():
     if request.args.get("from_invoice", type=int):
         source = db.get_or_404(Invoice, request.args.get("from_invoice", type=int)); source_lines = InvoiceLine.query.filter_by(invoice_id=source.id).all()
         seed = {"invoice_type": source.invoice_type, "payment_method": source.payment_method, "customer": source.customer, "vat_number": source.vat_number, "customer_address": source.customer_address or "", "customer_profession": source.customer_profession or "", "notes": source.notes or "", "lines": [{"description": line.description, "quantity": str(line.quantity), "unit_price": str(line.unit_price), "vat_rate": str(Decimal(line.vat_rate).normalize()), "reason": line.vat_exemption_reason or "", "category": line.income_category or "category1_3", "income_type": line.income_type or "E3_561_001"} for line in source_lines]}
+    elif request.args.get("from_template", type=int):
+        template = db.get_or_404(InvoiceTemplate, request.args.get("from_template", type=int)); template_lines = InvoiceTemplateLine.query.filter_by(template_id=template.id).all()
+        seed = {"invoice_type": template.invoice_type, "payment_method": template.payment_method, "customer": "", "vat_number": "", "customer_address": "", "customer_profession": "", "notes": template.notes or "", "lines": [{"description": line.description, "quantity": str(line.quantity), "unit_price": str(line.unit_price), "vat_rate": str(Decimal(line.vat_rate).normalize()), "reason": line.vat_exemption_reason or "", "category": line.income_category or "category1_3", "income_type": line.income_type or "E3_561_001"} for line in template_lines]}
     credit_sources = []
     for source in Invoice.query.filter(Invoice.status == "transmitted", Invoice.invoice_type.in_(["1.1", "2.1", "11.1", "11.2"]), Invoice.mydata_mark.isnot(None)).order_by(Invoice.issue_date.desc(), Invoice.id.desc()).all():
         source_lines = InvoiceLine.query.filter_by(invoice_id=source.id).order_by(InvoiceLine.id).all()
@@ -632,7 +635,9 @@ def save_invoice_template(invoice_id):
 def templates(): return render_template("templates.html", templates=InvoiceTemplate.query.order_by(InvoiceTemplate.created_at.desc()).all(), invoice_types=INVOICE_TYPES)
 @app.post("/templates/<int:template_id>/use")
 def use_template(template_id):
-    template = db.get_or_404(InvoiceTemplate, template_id); lines = InvoiceTemplateLine.query.filter_by(template_id=template.id).all(); return redirect(url_for("invoice_detail", invoice_id=create_draft_from(template, lines).id))
+    template = db.get_or_404(InvoiceTemplate, template_id)
+    audit("template_opened", template.name)
+    return redirect(url_for("new_invoice", from_template=template.id))
 @app.post("/invoices/<int:invoice_id>/send")
 def send_invoice(invoice_id):
     invoice = db.get_or_404(Invoice, invoice_id)
@@ -744,12 +749,9 @@ def clients():
     pagination = client_query.order_by(Client.name).paginate(page=page, per_page=12, error_out=False)
     saved_clients = pagination.items
     invoice_counts = {}
-    invoice_type_counts = {}
     for vat_number, count in db.session.query(Invoice.vat_number, func.count(Invoice.id)).group_by(Invoice.vat_number):
         invoice_counts[vat_number] = count
-    for vat_number, invoice_type, count in db.session.query(Invoice.vat_number, Invoice.invoice_type, func.count(Invoice.id)).filter(Invoice.status == "transmitted").group_by(Invoice.vat_number, Invoice.invoice_type):
-        invoice_type_counts.setdefault(vat_number, {})[invoice_type] = count
-    return render_template("clients.html", clients=saved_clients, invoice_counts=invoice_counts, invoice_type_counts=invoice_type_counts, invoice_types=INVOICE_TYPES, pagination=pagination, filters=request.args, client_suggestions=Client.query.order_by(Client.name).all())
+    return render_template("clients.html", clients=saved_clients, invoice_counts=invoice_counts, pagination=pagination, filters=request.args, client_suggestions=Client.query.order_by(Client.name).all())
 
 @app.get("/clients/<int:client_id>/invoices")
 def client_invoices(client_id):
